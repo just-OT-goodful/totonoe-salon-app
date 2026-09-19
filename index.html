@@ -212,6 +212,10 @@
   .admin-input, .admin-textarea { width: 100%; border: 1.5px solid var(--line-strong); border-radius: 10px; padding: 11px 13px; font-family: inherit; font-size: var(--fs-sm); color: var(--ink); background: var(--surface); }
   .admin-textarea { min-height: 84px; resize: vertical; }
   .admin-fieldlabel { font-size: var(--fs-xs); color: var(--ink-soft); display: block; margin-bottom: 5px; font-weight: 500; }
+  .dchip-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+  .dchip { display: inline-flex; align-items: center; gap: 7px; border: 1.5px solid var(--line-strong); border-radius: 999px; padding: 9px 14px; min-height: 40px; font-size: var(--fs-sm); background: var(--surface); color: var(--ink); cursor: pointer; user-select: none; }
+  .dchip input { margin: 0; width: 16px; height: 16px; accent-color: var(--moss); flex-shrink: 0; }
+  .dchip:has(input:checked) { background: var(--moss); border-color: var(--moss); color: #fff; }
 
   .mailcard { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
   .mailcard-head { background: #EAE5D6; padding: 11px 16px; font-size: var(--fs-xs); color: var(--ink-soft); display: flex; flex-direction: column; gap: 3px; font-weight: 500; }
@@ -319,7 +323,7 @@ function slotReason(menu, dayBookings, d, t) {
   if (endMin > BUSINESS_HOURS.end * 60) return "closed";
   const now = new Date();
   if (toDateKey(now) === toDateKey(d) && startMin <= now.getHours() * 60 + now.getMinutes()) return "past";
-  if (isBlockedSlot(toDateKey(d), t)) return "blocked";
+  if (isBlockedSlot(toDateKey(d), t)) return "taken";
   for (const b of dayBookings) {
     if (b.status !== "cancelled" && startMin < toMinutes(b.end) && endMin > toMinutes(b.start)) return "taken";
   }
@@ -373,6 +377,8 @@ const S = {
   adminNotice: null,
   adminConfirmCancelId: null,
   savedFlash: "",
+  adminDateOffset: 0,
+  adminBlockDate: toDateKey(new Date()),
 };
 
 (function loadPersisted() {
@@ -550,36 +556,27 @@ function adminSaveContact() {
 }
 
 // ---- 休業日（不定休） ----
-function adminAddClosedDate() {
-  const el = document.getElementById("closed-date-input");
-  const val = el && el.value;
-  if (!val) return;
-  const list = S.settings.closedDates || [];
-  if (list.includes(val)) { flash("すでに追加されています"); return; }
-  saveSettings({ ...S.settings, closedDates: [...list, val].sort() });
-  if (el) el.value = "";
-  flash("休業日を追加しました");
-}
-function adminRemoveClosedDate(dateKey) {
-  saveSettings({ ...S.settings, closedDates: (S.settings.closedDates || []).filter((d) => d !== dateKey) });
-  flash("休業日を削除しました");
+// 表示中の期間（S.adminDateOffset 〜 +28日）のチェック状態を一括で反映する。
+// 期間外に設定済みの休業日はそのまま保持する。
+function adminShiftClosedRange(delta) { S.adminDateOffset = Math.max(0, S.adminDateOffset + delta * 28); render(); }
+function adminSaveClosedDates() {
+  const boxes = Array.from(document.querySelectorAll(".closed-date-checkbox"));
+  const shown = boxes.map((b) => b.value);
+  const checked = boxes.filter((b) => b.checked).map((b) => b.value);
+  const kept = (S.settings.closedDates || []).filter((d) => !shown.includes(d));
+  saveSettings({ ...S.settings, closedDates: [...kept, ...checked].sort() });
+  flash("休業日を更新しました");
 }
 
 // ---- 特定時間帯の予約不可設定 ----
-function adminAddBlockedSlot() {
-  const dEl = document.getElementById("block-date-input");
-  const tEl = document.getElementById("block-time-input");
-  const dateKey = dEl && dEl.value;
-  const time = tEl && tEl.value;
-  if (!dateKey || !time) return;
-  const list = S.settings.blockedSlots || [];
-  if (list.some((b) => b.dateKey === dateKey && b.time === time)) { flash("すでに追加されています"); return; }
-  saveSettings({ ...S.settings, blockedSlots: [...list, { dateKey, time }].sort((a, b) => (a.dateKey + a.time).localeCompare(b.dateKey + b.time)) });
-  flash("予約不可の時間帯を追加しました");
-}
-function adminRemoveBlockedSlot(dateKey, time) {
-  saveSettings({ ...S.settings, blockedSlots: (S.settings.blockedSlots || []).filter((b) => !(b.dateKey === dateKey && b.time === time)) });
-  flash("予約不可の時間帯を削除しました");
+function adminSetBlockDate(el) { S.adminBlockDate = el.value; render(); }
+function adminSaveBlockedSlots() {
+  const date = S.adminBlockDate;
+  const checked = Array.from(document.querySelectorAll(".block-time-checkbox:checked")).map((b) => b.value);
+  const others = (S.settings.blockedSlots || []).filter((b) => b.dateKey !== date);
+  const mine = checked.map((t) => ({ dateKey: date, time: t }));
+  saveSettings({ ...S.settings, blockedSlots: [...others, ...mine].sort((a, b) => (a.dateKey + a.time).localeCompare(b.dateKey + b.time)) });
+  flash("予約不可の時間を更新しました");
 }
 
 // ============================================================
@@ -706,7 +703,7 @@ function screenBook() {
           const reason = slotReason(mn, S.bookings[toDateKey(S.date)] || [], S.date, t);
           const avail = reason === null;
           const sel = S.time === t;
-          const label = sel ? "選択中" : avail ? "予約できます" : reason === "taken" ? "予約済み" : reason === "past" ? "受付終了" : reason === "blocked" ? "予約不可" : "対象外";
+          const label = sel ? "選択中" : avail ? "予約できます" : reason === "taken" ? "予約済み" : reason === "past" ? "受付終了" : "対象外";
           h += `<button class="timerow${sel ? " sel" : ""}${!avail ? " off" : ""}" ${avail ? `onclick="selectTime('${t}')"` : "disabled"}><span>${t} 〜 ${addMinutes(t, mn.duration)}</span><span class="badge">${label}</span></button>`;
         });
         h += "</div>";
@@ -865,42 +862,38 @@ function adminShellHtml() {
 
   h += '<div class="admin-section-title">休業日の設定（不定休）</div>';
   h += '<div class="admin-row">';
-  h += '<p class="muted" style="font-size:var(--fs-xs);margin:0 0 10px;">曜日は固定せず、休みたい日を個別に追加してください。追加した日はお客様の日付選択でグレーアウトされます。</p>';
-  h += '<div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:10px;">';
-  h += '<label style="flex:1;min-width:150px;"><span class="admin-fieldlabel">休業日を追加</span><input type="date" id="closed-date-input" class="admin-input"></label>';
-  h += '<button class="admin-btn admin-btn-approve" style="flex:none;width:auto;padding:0 20px;" onclick="adminAddClosedDate()">追加</button>';
+  h += '<p class="muted" style="font-size:var(--fs-xs);margin:0 0 10px;">曜日は固定せず、休みたい日にチェックを入れてください。複数まとめて選べます。追加した日はお客様の日付選択でグレーアウトされます。</p>';
+  h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">';
+  h += `<button class="btn btn-outline" style="padding:0 14px;min-height:38px;font-size:var(--fs-xs);" ${S.adminDateOffset === 0 ? "disabled" : ""} onclick="adminShiftClosedRange(-1)">‹ 前の期間</button>`;
+  h += `<button class="btn btn-outline" style="padding:0 14px;min-height:38px;font-size:var(--fs-xs);" onclick="adminShiftClosedRange(1)">次の期間 ›</button>`;
   h += '</div>';
+  h += '<div class="dchip-grid">';
+  const closedRange = Array.from({ length: 28 }, (_, i) => daysFromNow(S.adminDateOffset + i));
+  closedRange.forEach((d) => {
+    const dk = toDateKey(d);
+    const checked = isClosedDate(dk);
+    h += `<label class="dchip"><input type="checkbox" class="closed-date-checkbox" value="${dk}" ${checked ? "checked" : ""}>${d.getMonth() + 1}/${d.getDate()}（${dowJP(d)}）</label>`;
+  });
+  h += '</div>';
+  h += '<button class="admin-btn admin-btn-approve" style="margin-top:12px;" onclick="adminSaveClosedDates()">この期間の休業日を更新する</button>';
   const closedDates = (S.settings.closedDates || []).slice().sort();
-  if (closedDates.length === 0) { h += '<p class="admin-empty">休業日は設定されていません。</p>'; }
-  else {
-    closedDates.forEach((dk) => {
-      const dow = dowJP(new Date(dk + "T00:00:00"));
-      h += `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-top:1px solid var(--line);"><span style="font-size:var(--fs-sm);">${dk.replace(/-/g, "/")}（${dow}）</span><button class="btn-text" style="color:var(--cancel-text);" onclick="adminRemoveClosedDate('${dk}')">削除</button></div>`;
-    });
-  }
+  h += `<p class="muted" style="font-size:var(--fs-xs);margin:14px 0 0;">現在の休業日：${closedDates.length ? closedDates.map((dk) => dk.replace(/-/g, "/")).join("、") : "設定されていません"}</p>`;
   h += '</div>';
 
   h += '<div class="admin-section-title">特定時間帯の予約不可設定</div>';
   h += '<div class="admin-row">';
-  h += '<p class="muted" style="font-size:var(--fs-xs);margin:0 0 10px;">実際の予約とは別に、特定の日時だけを選べなくします（私用の外出など）。</p>';
-  h += '<div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:10px;">';
-  h += '<label style="flex:1;min-width:130px;"><span class="admin-fieldlabel">日付</span><input type="date" id="block-date-input" class="admin-input"></label>';
-  h += '<label style="flex:1;min-width:110px;"><span class="admin-fieldlabel">時間</span><select id="block-time-input" class="admin-input">';
+  h += '<p class="muted" style="font-size:var(--fs-xs);margin:0 0 10px;">実際の予約とは別に、特定の日時だけを選べなくします（私用の外出など）。日付を選び、予約不可にしたい時間に複数チェックを入れてください。</p>';
+  h += `<label style="display:block;margin-bottom:12px;max-width:220px;"><span class="admin-fieldlabel">日付</span><input type="date" id="block-date-input" class="admin-input" value="${S.adminBlockDate}" onchange="adminSetBlockDate(this)"></label>`;
+  h += '<div class="dchip-grid">';
   for (let m = BUSINESS_HOURS.start * 60; m <= BUSINESS_HOURS.end * 60 - SLOT_INTERVAL; m += SLOT_INTERVAL) {
     const t = `${pad(Math.floor(m / 60))}:${pad(m % 60)}`;
-    h += `<option value="${t}">${t}</option>`;
+    const checked = isBlockedSlot(S.adminBlockDate, t);
+    h += `<label class="dchip"><input type="checkbox" class="block-time-checkbox" value="${t}" ${checked ? "checked" : ""}>${t}</label>`;
   }
-  h += '</select></label>';
-  h += '<button class="admin-btn admin-btn-approve" style="flex:none;width:auto;padding:0 20px;" onclick="adminAddBlockedSlot()">追加</button>';
   h += '</div>';
+  h += `<button class="admin-btn admin-btn-approve" style="margin-top:12px;" onclick="adminSaveBlockedSlots()">この日の予約不可時間を更新する</button>`;
   const blockedSlots = (S.settings.blockedSlots || []).slice().sort((a, b) => (a.dateKey + a.time).localeCompare(b.dateKey + b.time));
-  if (blockedSlots.length === 0) { h += '<p class="admin-empty">予約不可に設定した時間帯はありません。</p>'; }
-  else {
-    blockedSlots.forEach((b) => {
-      const dow = dowJP(new Date(b.dateKey + "T00:00:00"));
-      h += `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-top:1px solid var(--line);"><span style="font-size:var(--fs-sm);">${b.dateKey.replace(/-/g, "/")}（${dow}） ${b.time}</span><button class="btn-text" style="color:var(--cancel-text);" onclick="adminRemoveBlockedSlot('${b.dateKey}','${b.time}')">削除</button></div>`;
-    });
-  }
+  h += `<p class="muted" style="font-size:var(--fs-xs);margin:14px 0 0;">現在の予約不可時間：${blockedSlots.length ? blockedSlots.map((b) => b.dateKey.replace(/-/g, "/") + " " + b.time).join("、") : "設定されていません"}</p>`;
   h += '</div>';
 
   h += '<div class="admin-section-title">承認待ちの予約リクエスト</div>';
