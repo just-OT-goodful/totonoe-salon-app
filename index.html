@@ -267,6 +267,7 @@ const DEFAULT_SETTINGS = {
   textSize: "base",
   closedDates: [],
   blockedSlots: [],
+  menuItems: [], // 空なら MENU_ITEMS（初期値）を使う。管理者が編集すると中身が入る。
 };
 
 const CATEGORIES = [
@@ -288,6 +289,9 @@ const MENU_ITEMS = [
   { id: "m6", cat: "full", name: "パーソナル・リハビリコース", duration: 60, price: 8000, desc: "作業療法士による本格的な評価と個別リハビリ" },
   { id: "m7", cat: "part", name: "その他の整えコース", duration: 30, price: 3000, desc: "気になる部位を自由にお伝えください" },
 ];
+
+// 管理者が編集済みならその内容を、未編集なら初期値（MENU_ITEMS）を使う。
+function currentMenuItems() { return (S.settings.menuItems && S.settings.menuItems.length) ? S.settings.menuItems : MENU_ITEMS; }
 
 function isBlocking(b) { return b.status === "pending" || b.status === "confirmed"; }
 
@@ -397,6 +401,7 @@ const S = {
         textSize: parsed.textSize === "large" ? "large" : "base",
         closedDates: Array.isArray(parsed.closedDates) ? parsed.closedDates : [],
         blockedSlots: Array.isArray(parsed.blockedSlots) ? parsed.blockedSlots : [],
+        menuItems: Array.isArray(parsed.menuItems) ? parsed.menuItems : [],
       };
     }
   } catch (e) {}
@@ -422,7 +427,7 @@ function setBookingStatus(id, status) {
   saveBookings(next);
 }
 function allBookingsFlat() { return Object.values(S.bookings).flat(); }
-function menu() { return MENU_ITEMS.find((m) => m.id === S.menuId); }
+function menu() { return currentMenuItems().find((m) => m.id === S.menuId); }
 function isReturning() { return !!(S.profile.name && S.profile.phone); }
 
 function myHistory() {
@@ -555,6 +560,33 @@ function adminSaveContact() {
   flash("連絡先を更新しました");
 }
 
+// ---- メニュー編集 ----
+function adminSaveMenuItems() {
+  const updated = currentMenuItems().map((m) => {
+    const nameEl = document.getElementById("menu-name-" + m.id);
+    const catEl = document.getElementById("menu-cat-" + m.id);
+    const durEl = document.getElementById("menu-duration-" + m.id);
+    const priceEl = document.getElementById("menu-price-" + m.id);
+    const descEl = document.getElementById("menu-desc-" + m.id);
+    const duration = durEl ? parseInt(durEl.value, 10) : NaN;
+    const price = priceEl ? parseInt(priceEl.value, 10) : NaN;
+    return {
+      id: m.id,
+      cat: catEl ? catEl.value : m.cat,
+      name: nameEl && nameEl.value.trim() ? nameEl.value.trim() : m.name,
+      duration: Number.isFinite(duration) && duration > 0 ? duration : m.duration,
+      price: Number.isFinite(price) && price >= 0 ? price : m.price,
+      desc: descEl ? descEl.value.trim() : m.desc,
+    };
+  });
+  saveSettings({ ...S.settings, menuItems: updated });
+  flash("メニューを更新しました");
+}
+function adminResetMenuItems() {
+  saveSettings({ ...S.settings, menuItems: [] });
+  flash("メニューを初期値に戻しました");
+}
+
 // ---- 休業日（不定休） ----
 // 表示中の期間（S.adminDateOffset 〜 +28日）のチェック状態を一括で反映する。
 // 期間外に設定済みの休業日はそのまま保持する。
@@ -593,7 +625,7 @@ function textSizeToggleHtml() {
 function screenHome() {
   const nb = nextBookingFn();
   const lastVisit = lastVisitFn();
-  const lastMenu = lastVisit ? MENU_ITEMS.find((m) => m.name === lastVisit.menuName) : null;
+  const lastMenu = lastVisit ? currentMenuItems().find((m) => m.name === lastVisit.menuName) : null;
   let h = '<div class="screen-body">';
   if (S.settings.announcement.trim()) {
     h += `<div class="notice"><span class="notice-icon">${IconAlert(20)}</span><div class="notice-body"><p class="lbl">お知らせ</p><p class="msg">${esc(S.settings.announcement)}</p></div></div>`;
@@ -670,7 +702,8 @@ function screenBook() {
     h += '<div style="display:flex;gap:8px;overflow-x:auto;margin-bottom:14px;padding-bottom:2px;">';
     CATEGORIES.forEach((c) => { h += `<button class="chip ${S.category === c.id ? "active" : ""}" onclick="selectCategory('${c.id}')">${c.label}</button>`; });
     h += "</div>";
-    const list = S.category === "all" ? MENU_ITEMS : MENU_ITEMS.filter((m) => m.cat === S.category);
+    const items = currentMenuItems();
+    const list = S.category === "all" ? items : items.filter((m) => m.cat === S.category);
     list.forEach((m) => {
       h += `<button class="menuitem ${S.menuId === m.id ? "sel" : ""}" onclick="selectMenu('${m.id}')" aria-pressed="${S.menuId === m.id}">`;
       h += `<span class="menuitem-check">${CheckMark}</span><span class="menuitem-body">`;
@@ -906,6 +939,22 @@ function adminShellHtml() {
 
   h += '<div class="admin-section-title">過去・キャンセル済み</div>';
   h += past.length ? past.map((b) => adminRowHtml(b, `<div style="margin-top:10px;"><span class="pill ${statusPillClass(b.status, b.dateKey)}">${statusLabel(b.status)}</span></div>`)).join("") : '<p class="admin-empty">履歴はまだありません。</p>';
+
+  h += '<div class="admin-section-title">メニュー編集</div><p class="muted" style="font-size:var(--fs-xs);margin:-4px 0 10px;">名称・説明・時間・料金を変更できます。変更後は下部の「メニューを保存する」を押してください。</p>';
+  currentMenuItems().forEach((m) => {
+    h += '<div class="admin-row">';
+    h += `<label style="display:block;margin-bottom:10px;"><span class="admin-fieldlabel">メニュー名</span><input id="menu-name-${m.id}" class="admin-input" value="${esc(m.name)}"></label>`;
+    h += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">';
+    h += `<label style="flex:1;min-width:120px;"><span class="admin-fieldlabel">カテゴリ</span><select id="menu-cat-${m.id}" class="admin-input">`;
+    CATEGORIES.filter((c) => c.id !== "all").forEach((c) => { h += `<option value="${c.id}" ${c.id === m.cat ? "selected" : ""}>${c.label}</option>`; });
+    h += '</select></label>';
+    h += `<label style="width:100px;"><span class="admin-fieldlabel">時間（分）</span><input id="menu-duration-${m.id}" class="admin-input" type="number" min="1" step="1" value="${m.duration}"></label>`;
+    h += `<label style="width:120px;"><span class="admin-fieldlabel">料金（円）</span><input id="menu-price-${m.id}" class="admin-input" type="number" min="0" step="100" value="${m.price}"></label>`;
+    h += '</div>';
+    h += `<label style="display:block;"><span class="admin-fieldlabel">説明</span><input id="menu-desc-${m.id}" class="admin-input" value="${esc(m.desc)}"></label>`;
+    h += '</div>';
+  });
+  h += '<div style="display:flex;gap:8px;margin:12px 0 0;"><button class="admin-btn admin-btn-approve" onclick="adminSaveMenuItems()">メニューを保存する</button><button class="admin-btn admin-btn-cancel" onclick="adminResetMenuItems()">初期値に戻す</button></div>';
 
   h += '<div class="admin-section-title">連絡先・SNSリンクの編集</div><p class="muted" style="font-size:var(--fs-xs);margin:-4px 0 10px;">頻繁に変更するものではないため、一番下にまとめています</p><div class="admin-row">';
   [["phone", "電話番号"], ["email", "メールアドレス"], ["instagram", "Instagram URL"], ["website", "ホームページ URL"]].forEach(([key, label]) => {
