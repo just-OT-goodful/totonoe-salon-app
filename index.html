@@ -256,6 +256,16 @@
 const SUPABASE_URL = "https://idswizeiqkssqogmbwbz.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_2L6dZVMV6TsP2mCfyPk75g_f1pZXMoJ";
 
+// 予約リクエスト受信・承認・却下の通知メールを送る Edge Function。
+// 失敗しても予約自体は既に成立しているため、呼び出し側では結果を待たず・エラーも無視する。
+function notifyEmail(type, bookingId) {
+  fetch(SUPABASE_URL + "/functions/v1/send-booking-email", {
+    method: "POST",
+    headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({ type, bookingId }),
+  }).catch(() => { /* 通知メールの失敗は無視する */ });
+}
+
 async function rpc(name, params) {
   const res = await fetch(SUPABASE_URL + "/rest/v1/rpc/" + name, {
     method: "POST",
@@ -563,6 +573,7 @@ async function submitRequest() {
   saveProfile({ name, phone, email });
   S.confirmedId = id;
   S.saving = false;
+  notifyEmail("new_request", id);
   await Promise.all([refreshPublicBookings(), refreshMyBookings()]);
   render();
 }
@@ -588,6 +599,7 @@ async function adminApprove(id) {
   render();
   try {
     await rpc("admin_set_booking_status", { p_pin: S.adminPin, p_id: id, p_status: "confirmed" });
+    notifyEmail("approved", id);
     await Promise.all([refreshAdminBookings(), refreshPublicBookings()]);
   } catch (e) { handleAdminError(e); }
   render();
@@ -597,6 +609,7 @@ async function adminReject(id) {
   render();
   try {
     await rpc("admin_set_booking_status", { p_pin: S.adminPin, p_id: id, p_status: "cancelled" });
+    notifyEmail("rejected", id);
     await Promise.all([refreshAdminBookings(), refreshPublicBookings()]);
   } catch (e) { handleAdminError(e); }
   render();
