@@ -205,6 +205,7 @@
   .admin-row .cust a { color: var(--moss); }
   .admin-actions { display: flex; gap: 8px; margin-top: 12px; }
   .admin-btn { border: none; border-radius: 999px; padding: 0 16px; min-height: 46px; font-size: var(--fs-sm); font-weight: 600; cursor: pointer; font-family: inherit; white-space: nowrap; flex: 1; display: inline-flex; align-items: center; justify-content: center; }
+  .admin-btn:disabled { opacity: 0.4; cursor: default; }
   .admin-btn-approve { background: var(--moss); color: #fff; }
   .admin-btn-reject { background: var(--cancel-bg); color: var(--cancel-text); }
   .admin-btn-cancel { background: var(--neutral-bg); color: var(--neutral-text); }
@@ -246,16 +247,37 @@
 // ============================================================
 // 整えサロン 予約アプリ本体
 // フレームワーク・ビルド不要。素のHTML/CSS/JavaScriptのみで構成。
-// データはこの端末のブラウザ内（localStorage、キーは totonoe:*）に保存される。
+// 予約データ・サロン設定は Supabase（データベース）に保存され、
+// お客様・管理者のどちらからアクセスしても同じデータが共有される。
+// プロフィール（氏名・電話・メール）と文字サイズだけは、この端末だけの
+// ローカル設定として localStorage に保存する。
 // ============================================================
+
+const SUPABASE_URL = "https://idswizeiqkssqogmbwbz.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_2L6dZVMV6TsP2mCfyPk75g_f1pZXMoJ";
+
+async function rpc(name, params) {
+  const res = await fetch(SUPABASE_URL + "/rest/v1/rpc/" + name, {
+    method: "POST",
+    headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify(params || {}),
+  });
+  let data = null;
+  try { data = await res.json(); } catch (e) { /* 本文なし */ }
+  if (!res.ok) {
+    const msg = (data && data.message) || ("http_" + res.status);
+    throw new Error(msg);
+  }
+  return data;
+}
 
 const SALON_NAME = "整えサロン";
 const BUSINESS_HOURS = { start: 13, end: 17 };
 const SLOT_INTERVAL = 30;
-const ADMIN_PIN = "0000";
 
 // 休業日は曜日固定ではなく、管理者画面で個別に追加・削除する不定休リストとして扱う（settings.closedDates）。
 // 特定の日付・時間帯だけを予約不可にしたい場合は settings.blockedSlots に {dateKey, time} を追加する。
+// いずれも Supabase の app_settings テーブルに保存され、全員で共有される。
 const DEFAULT_SETTINGS = {
   announcement: "",
   contactInfo: {
@@ -264,7 +286,6 @@ const DEFAULT_SETTINGS = {
     instagram: "https://www.instagram.com/totonoe_salon/",
     website: "https://totonoe-salon.example.com",
   },
-  textSize: "base",
   closedDates: [],
   blockedSlots: [],
   menuItems: [], // 空なら MENU_ITEMS（初期値）を使う。管理者が編集すると中身が入る。
@@ -293,8 +314,6 @@ const MENU_ITEMS = [
 // 管理者が編集済みならその内容を、未編集なら初期値（MENU_ITEMS）を使う。
 function currentMenuItems() { return (S.settings.menuItems && S.settings.menuItems.length) ? S.settings.menuItems : MENU_ITEMS; }
 
-function isBlocking(b) { return b.status === "pending" || b.status === "confirmed"; }
-
 function pad(n) { return String(n).padStart(2, "0"); }
 function toDateKey(d) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; }
 function toMinutes(hhmm) { const [h, m] = hhmm.split(":").map(Number); return h * 60 + m; }
@@ -305,7 +324,6 @@ function formatDateJP(d) { return `${d.getMonth() + 1}月${d.getDate()}日（${d
 function daysFromNow(n) { const d = new Date(); d.setDate(d.getDate() + n); d.setHours(0, 0, 0, 0); return d; }
 function normPhone(p) { return (p || "").replace(/[^0-9]/g, ""); }
 function makeBookingId(dateKey, time) { return `${dateKey.replace(/-/g, "")}-${time.replace(":", "")}-${Math.random().toString(36).slice(2, 6)}`; }
-function nowMillis() { return Date.now(); }
 function cancelDeadlinePassed(dateKey) { return new Date() >= new Date(`${dateKey}T00:00:00`); }
 function isFuture(dateKey) { return dateKey >= toDateKey(new Date()); }
 function statusLabel(status) { return { pending: "承認待ち", confirmed: "確定", cancelled: "キャンセル済み" }[status] || status; }
@@ -339,6 +357,15 @@ function isPastOrClosed(d) {
 }
 function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 
+// サーバー側（スネークケース）の予約レコードを、画面側（キャメルケース）の形に変換する。
+function mapBookingRow(r) {
+  return {
+    id: r.id, dateKey: r.date_key, start: r.start_time, end: r.end_time,
+    name: r.name, phone: r.phone, email: r.email,
+    menuName: r.menu_name, price: r.price, status: r.status, createdAt: r.created_at,
+  };
+}
+
 // ============================================================
 // アイコン
 // ============================================================
@@ -356,7 +383,7 @@ const CheckMark = '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-wid
 const LeafDeco = '<svg class="banner-leaf" viewBox="0 0 100 100" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M50 95C50 60 60 30 90 8"/><path d="M50 95C50 55 40 25 12 5"/><path d="M50 70C58 62 66 58 76 56"/><path d="M50 55C57 48 63 45 71 43"/><path d="M50 70C42 62 34 58 24 56"/><path d="M50 55C43 48 37 45 29 43"/></svg>';
 
 // ============================================================
-// 状態・永続化（localStorage。本体の window.storage シムと同じキー）
+// 状態
 // ============================================================
 function readRoute() { return window.location.hash === "#admin" ? "admin" : "app"; }
 
@@ -370,71 +397,43 @@ const S = {
   time: null,
   dateOffset: 0,
   form: { name: "", phone: "", email: "" },
-  bookings: {},
+  publicBookings: [],   // 空き状況の判定用（個人情報なし）。全員が同じものを見る。
+  myBookings: [],       // 自分（電話番号）の予約履歴
   profile: { name: "", phone: "", email: "" },
   settings: JSON.parse(JSON.stringify(DEFAULT_SETTINGS)),
+  textSize: "base",
   saving: false,
   error: "",
   confirmedId: null,
   confirmCancelId: null,
   adminAuthed: false,
+  adminPin: "",
+  adminBookings: [],
   adminNotice: null,
   adminConfirmCancelId: null,
   savedFlash: "",
   adminDateOffset: 0,
   adminBlockDate: toDateKey(new Date()),
+  loading: true,
+  loadError: false,
 };
 
-(function loadPersisted() {
-  try { const b = localStorage.getItem("totonoe:bookings"); if (b) S.bookings = JSON.parse(b); } catch (e) {}
-  try {
-    const p = localStorage.getItem("totonoe:profile");
-    if (p) { const parsed = JSON.parse(p); S.profile = { name: parsed.name || "", phone: parsed.phone || "", email: parsed.email || "" }; S.form = { ...S.profile }; }
-  } catch (e) {}
-  try {
-    const s = localStorage.getItem("totonoe:settings");
-    if (s) {
-      const parsed = JSON.parse(s);
-      S.settings = {
-        announcement: parsed.announcement || "",
-        contactInfo: { ...DEFAULT_SETTINGS.contactInfo, ...(parsed.contactInfo || {}) },
-        textSize: parsed.textSize === "large" ? "large" : "base",
-        closedDates: Array.isArray(parsed.closedDates) ? parsed.closedDates : [],
-        blockedSlots: Array.isArray(parsed.blockedSlots) ? parsed.blockedSlots : [],
-        menuItems: Array.isArray(parsed.menuItems) ? parsed.menuItems : [],
-      };
-    }
-  } catch (e) {}
-  try { if (localStorage.getItem("totonoe:adminAuthed") === "1") S.adminAuthed = true; } catch (e) {}
-})();
+// プロフィール・文字サイズ・管理者パスコードは、この端末だけのローカル情報。
+try {
+  const p = localStorage.getItem("totonoe:profile");
+  if (p) { const parsed = JSON.parse(p); S.profile = { name: parsed.name || "", phone: parsed.phone || "", email: parsed.email || "" }; S.form = { ...S.profile }; }
+} catch (e) {}
+try { if (localStorage.getItem("totonoe:textSize") === "large") S.textSize = "large"; } catch (e) {}
+try { const pin = sessionStorage.getItem("totonoe:adminPin"); if (pin) S.adminPin = pin; } catch (e) {}
 
-function saveBookings(next) {
-  S.bookings = next;
-  try { localStorage.setItem("totonoe:bookings", JSON.stringify(next)); }
-  catch (e) { S.error = "保存に失敗しました。もう一度お試しください。"; }
-}
 function saveProfile(next) {
   S.profile = next;
   try { localStorage.setItem("totonoe:profile", JSON.stringify(next)); } catch (e) {}
 }
-function saveSettings(next) {
-  S.settings = next;
-  try { localStorage.setItem("totonoe:settings", JSON.stringify(next)); } catch (e) {}
-}
-function setBookingStatus(id, status) {
-  const next = {};
-  for (const [key, list] of Object.entries(S.bookings)) next[key] = list.map((b) => (b.id === id ? { ...b, status } : b));
-  saveBookings(next);
-}
-function allBookingsFlat() { return Object.values(S.bookings).flat(); }
+
 function menu() { return currentMenuItems().find((m) => m.id === S.menuId); }
 function isReturning() { return !!(S.profile.name && S.profile.phone); }
-
-function myHistory() {
-  const mine = normPhone(S.profile.phone);
-  if (!mine) return [];
-  return allBookingsFlat().filter((b) => normPhone(b.phone) === mine).sort((a, b) => (a.dateKey + a.start).localeCompare(b.dateKey + b.start));
-}
+function myHistory() { return S.myBookings; }
 function nextBookingFn() {
   const todayKey = toDateKey(new Date());
   return myHistory().find((b) => b.dateKey >= todayKey && b.status !== "cancelled") || null;
@@ -446,6 +445,49 @@ function lastVisitFn() {
 }
 
 // ============================================================
+// サーバーとのデータ同期
+// ============================================================
+async function refreshPublicBookings() {
+  try {
+    const rows = await rpc("list_bookings_public", {});
+    S.publicBookings = (rows || []).map((r) => ({ dateKey: r.date_key, start: r.start_time, end: r.end_time, status: r.status }));
+  } catch (e) { /* 失敗時は直前のキャッシュのまま */ }
+}
+async function refreshMyBookings() {
+  if (!normPhone(S.profile.phone)) { S.myBookings = []; return; }
+  try {
+    const rows = await rpc("my_bookings", { p_phone: S.profile.phone });
+    S.myBookings = (rows || []).map(mapBookingRow);
+  } catch (e) { /* 失敗時は直前のキャッシュのまま */ }
+}
+async function refreshAdminBookings() {
+  const rows = await rpc("admin_list_bookings", { p_pin: S.adminPin });
+  S.adminBookings = (rows || []).map(mapBookingRow);
+}
+async function saveSettingsRemote(partial) {
+  const next = { ...S.settings, ...partial };
+  await rpc("admin_update_settings", {
+    p_pin: S.adminPin,
+    p_announcement: next.announcement,
+    p_contact_info: next.contactInfo,
+    p_closed_dates: next.closedDates,
+    p_blocked_slots: next.blockedSlots,
+    p_menu_items: next.menuItems,
+  });
+  S.settings = next;
+}
+function handleAdminError(e) {
+  if (e && e.message === "invalid_pin") {
+    S.adminAuthed = false; S.adminPin = "";
+    try { sessionStorage.removeItem("totonoe:adminPin"); } catch (err) {}
+    S.savedFlash = "認証が切れました。お手数ですがもう一度パスコードを入力してください。";
+  } else {
+    S.savedFlash = "通信エラーが発生しました。電波の良い場所でもう一度お試しください。";
+  }
+  setTimeout(() => { S.savedFlash = ""; render(); }, 3000);
+}
+
+// ============================================================
 // アクション
 // ============================================================
 function startFlow(presetMenuId) {
@@ -454,11 +496,14 @@ function startFlow(presetMenuId) {
   S.flowStep = presetMenuId ? 1 : 0;
   S.tab = "book";
   render();
+  refreshPublicBookings().then(render);
 }
 function changeTab(t) {
   if (t === "book" && !S.confirmedId) { S.flowStep = 0; S.menuId = null; S.date = null; S.time = null; S.error = ""; }
   S.tab = t;
   render();
+  if (t === "book") { refreshPublicBookings().then(render); }
+  else if (t === "mypage" || t === "home") { Promise.all([refreshMyBookings(), refreshPublicBookings()]).then(render); }
 }
 function selectDate(iso) {
   S.date = new Date(iso); S.time = null;
@@ -469,7 +514,11 @@ function shiftDate(delta) { S.dateOffset = Math.max(0, S.dateOffset + delta * 12
 function selectMenu(id) { S.menuId = id; render(); }
 function selectCategory(c) { S.category = c; render(); }
 function selectTime(t) { S.time = t; render(); }
-function setTextSize(v) { saveSettings({ ...S.settings, textSize: v }); render(); }
+function setTextSize(v) {
+  S.textSize = v === "large" ? "large" : "base";
+  try { localStorage.setItem("totonoe:textSize", S.textSize); } catch (e) {}
+  render();
+}
 
 function canNext() {
   if (S.flowStep === 0) return !!S.menuId;
@@ -488,80 +537,132 @@ function goBack() { S.flowStep--; render(); }
 function editInfo() { S.flowStep = 2; render(); }
 function updateForm(field, val) { S.form[field] = val; }
 
-function submitRequest() {
+async function submitRequest() {
   const mn = menu();
   if (!mn || !S.date || !S.time) return;
   S.saving = true; S.error = ""; render();
   const key = toDateKey(S.date);
   const end = addMinutes(S.time, mn.duration);
-  const dayList = S.bookings[key] || [];
-  const overlap = dayList.some((b) => isBlocking(b) && toMinutes(S.time) < toMinutes(b.end) && toMinutes(end) > toMinutes(b.start));
-  if (overlap) {
-    S.error = "申し訳ありません。この時間は直前に埋まりました。別の時間をお選びください。";
-    S.saving = false; S.time = null; S.flowStep = 1; render(); return;
+  const id = makeBookingId(key, S.time);
+  const name = S.form.name.trim(), phone = S.form.phone.trim(), email = S.form.email.trim();
+  try {
+    await rpc("create_booking", {
+      p_id: id, p_date_key: key, p_start: S.time, p_end: end,
+      p_name: name, p_phone: phone, p_email: email, p_menu_name: mn.name, p_price: mn.price,
+    });
+  } catch (e) {
+    S.saving = false;
+    S.error = (e.message === "slot_taken" || e.message === "blocked_slot" || e.message === "closed_date")
+      ? "申し訳ありません。この時間は直前に埋まりました。別の時間をお選びください。"
+      : "通信エラーが発生しました。電波の良い場所でもう一度お試しください。";
+    S.time = null; S.flowStep = 1;
+    await refreshPublicBookings();
+    render();
+    return;
   }
-  const entry = {
-    id: makeBookingId(key, S.time), dateKey: key, start: S.time, end,
-    name: S.form.name.trim(), phone: S.form.phone.trim(), email: S.form.email.trim(),
-    menuName: mn.name, price: mn.price, createdAt: nowMillis(), status: "pending",
-  };
-  saveBookings({ ...S.bookings, [key]: [...dayList, entry] });
-  saveProfile({ name: entry.name, phone: entry.phone, email: entry.email });
-  S.confirmedId = entry.id;
+  saveProfile({ name, phone, email });
+  S.confirmedId = id;
   S.saving = false;
+  await Promise.all([refreshPublicBookings(), refreshMyBookings()]);
   render();
 }
 function resetFlow() { S.flowStep = 0; S.menuId = null; S.date = null; S.time = null; S.confirmedId = null; S.error = ""; S.tab = "home"; render(); }
 function askCancelBooking(id) { S.confirmCancelId = id; render(); }
 function cancelCancelBooking() { S.confirmCancelId = null; render(); }
-function cancelBooking(id) { setBookingStatus(id, "cancelled"); S.confirmCancelId = null; render(); }
+async function cancelBooking(id) {
+  S.confirmCancelId = null;
+  try {
+    await rpc("cancel_booking", { p_id: id, p_phone: S.profile.phone });
+    await Promise.all([refreshMyBookings(), refreshPublicBookings()]);
+  } catch (e) {
+    S.savedFlash = "キャンセルに失敗しました。電波の良い場所でもう一度お試しください。";
+    setTimeout(() => { S.savedFlash = ""; render(); }, 3000);
+  }
+  render();
+}
 
 // ---- 管理画面のアクション ----
-function noticeFor(id, status) { const b = allBookingsFlat().find((x) => x.id === id); return b ? { ...b, status } : null; }
-function adminApprove(id) { S.adminNotice = { type: "approved", booking: noticeFor(id, "confirmed") }; setBookingStatus(id, "confirmed"); render(); }
-function adminReject(id) { S.adminNotice = { type: "rejected", booking: noticeFor(id, "cancelled") }; setBookingStatus(id, "cancelled"); render(); }
+function noticeFor(id, status) { const b = S.adminBookings.find((x) => x.id === id); return b ? { ...b, status } : null; }
+async function adminApprove(id) {
+  S.adminNotice = { type: "approved", booking: noticeFor(id, "confirmed") };
+  render();
+  try {
+    await rpc("admin_set_booking_status", { p_pin: S.adminPin, p_id: id, p_status: "confirmed" });
+    await Promise.all([refreshAdminBookings(), refreshPublicBookings()]);
+  } catch (e) { handleAdminError(e); }
+  render();
+}
+async function adminReject(id) {
+  S.adminNotice = { type: "rejected", booking: noticeFor(id, "cancelled") };
+  render();
+  try {
+    await rpc("admin_set_booking_status", { p_pin: S.adminPin, p_id: id, p_status: "cancelled" });
+    await Promise.all([refreshAdminBookings(), refreshPublicBookings()]);
+  } catch (e) { handleAdminError(e); }
+  render();
+}
 function askAdminCancel(id) { S.adminConfirmCancelId = id; render(); }
 function cancelAdminCancel() { S.adminConfirmCancelId = null; render(); }
-function adminCancelConfirmed(id) { setBookingStatus(id, "cancelled"); S.adminConfirmCancelId = null; render(); }
+async function adminCancelConfirmed(id) {
+  S.adminConfirmCancelId = null;
+  try {
+    await rpc("admin_set_booking_status", { p_pin: S.adminPin, p_id: id, p_status: "cancelled" });
+    await Promise.all([refreshAdminBookings(), refreshPublicBookings()]);
+  } catch (e) { handleAdminError(e); }
+  render();
+}
 function dismissNotice() { S.adminNotice = null; render(); }
 
-function goAdmin() { window.location.hash = "#admin"; S.route = "admin"; render(); }
+function goAdmin() {
+  window.location.hash = "#admin"; S.route = "admin"; render();
+  if (S.adminAuthed) refreshAdminBookings().then(render).catch((e) => { handleAdminError(e); render(); });
+}
 function leaveAdmin() { window.location.hash = ""; S.route = "app"; render(); }
 window.addEventListener("hashchange", () => { S.route = readRoute(); render(); });
 
-function doAdminLoginFromInput() {
+async function doAdminLoginFromInput() {
   const el = document.getElementById("pin-input");
+  const btn = document.getElementById("pin-login-btn");
   const pin = el ? el.value.trim() : "";
-  if (pin !== ADMIN_PIN) {
+  if (btn) btn.disabled = true;
+  let ok = false;
+  try { ok = await rpc("admin_verify_pin", { p_pin: pin }); } catch (e) { ok = false; }
+  if (!ok) {
     const err = document.getElementById("pin-error"); if (err) err.style.display = "block";
     if (el) { el.style.borderColor = "#E3B08C"; el.focus(); }
+    if (btn) btn.disabled = false;
     return;
   }
-  S.adminAuthed = true;
-  try { localStorage.setItem("totonoe:adminAuthed", "1"); } catch (e) {}
+  S.adminAuthed = true; S.adminPin = pin;
+  try { sessionStorage.setItem("totonoe:adminPin", pin); } catch (e) {}
+  try { await refreshAdminBookings(); } catch (e) {}
   render();
 }
 function adminLogout() {
-  S.adminAuthed = false; S.adminNotice = null;
-  try { localStorage.removeItem("totonoe:adminAuthed"); } catch (e) {}
+  S.adminAuthed = false; S.adminPin = ""; S.adminNotice = null; S.adminBookings = [];
+  try { sessionStorage.removeItem("totonoe:adminPin"); } catch (e) {}
   render();
 }
 function flash(msg) { S.savedFlash = msg; render(); setTimeout(() => { S.savedFlash = ""; render(); }, 2000); }
-function adminSaveAnnouncement() {
+
+async function adminSaveAnnouncement() {
   const el = document.getElementById("announcement-input");
-  saveSettings({ ...S.settings, announcement: el ? el.value : S.settings.announcement });
-  flash("お知らせを更新しました");
+  try { await saveSettingsRemote({ announcement: el ? el.value : S.settings.announcement }); flash("お知らせを更新しました"); }
+  catch (e) { handleAdminError(e); render(); }
 }
-function adminClearAnnouncement() { saveSettings({ ...S.settings, announcement: "" }); flash("お知らせを消しました"); }
-function adminSaveContact() {
+async function adminClearAnnouncement() {
+  try { await saveSettingsRemote({ announcement: "" }); flash("お知らせを消しました"); }
+  catch (e) { handleAdminError(e); render(); }
+}
+async function adminSaveContact() {
   const ci = { ...S.settings.contactInfo };
   ["phone", "email", "instagram", "website"].forEach((k) => { const el = document.getElementById("contact-" + k); if (el) ci[k] = el.value; });
-  saveSettings({ ...S.settings, contactInfo: ci });
-  flash("連絡先を更新しました");
+  try { await saveSettingsRemote({ contactInfo: ci }); flash("連絡先を更新しました"); }
+  catch (e) { handleAdminError(e); render(); }
 }
 
 // ---- メニュー編集 ----
-function adminSaveMenuItems() {
+async function adminSaveMenuItems() {
   const updated = currentMenuItems().map((m) => {
     const nameEl = document.getElementById("menu-name-" + m.id);
     const catEl = document.getElementById("menu-cat-" + m.id);
@@ -579,43 +680,60 @@ function adminSaveMenuItems() {
       desc: descEl ? descEl.value.trim() : m.desc,
     };
   });
-  saveSettings({ ...S.settings, menuItems: updated });
-  flash("メニューを更新しました");
+  try { await saveSettingsRemote({ menuItems: updated }); flash("メニューを更新しました"); }
+  catch (e) { handleAdminError(e); render(); }
 }
-function adminResetMenuItems() {
-  saveSettings({ ...S.settings, menuItems: [] });
-  flash("メニューを初期値に戻しました");
+async function adminResetMenuItems() {
+  try { await saveSettingsRemote({ menuItems: [] }); flash("メニューを初期値に戻しました"); }
+  catch (e) { handleAdminError(e); render(); }
 }
 
 // ---- 休業日（不定休） ----
-// 表示中の期間（S.adminDateOffset 〜 +28日）のチェック状態を一括で反映する。
-// 期間外に設定済みの休業日はそのまま保持する。
 function adminShiftClosedRange(delta) { S.adminDateOffset = Math.max(0, S.adminDateOffset + delta * 28); render(); }
-function adminSaveClosedDates() {
+async function adminSaveClosedDates() {
   const boxes = Array.from(document.querySelectorAll(".closed-date-checkbox"));
   const shown = boxes.map((b) => b.value);
   const checked = boxes.filter((b) => b.checked).map((b) => b.value);
   const kept = (S.settings.closedDates || []).filter((d) => !shown.includes(d));
-  saveSettings({ ...S.settings, closedDates: [...kept, ...checked].sort() });
-  flash("休業日を更新しました");
+  try { await saveSettingsRemote({ closedDates: [...kept, ...checked].sort() }); flash("休業日を更新しました"); }
+  catch (e) { handleAdminError(e); render(); }
 }
 
 // ---- 特定時間帯の予約不可設定 ----
 function adminSetBlockDate(el) { S.adminBlockDate = el.value; render(); }
-function adminSaveBlockedSlots() {
+async function adminSaveBlockedSlots() {
   const date = S.adminBlockDate;
   const checked = Array.from(document.querySelectorAll(".block-time-checkbox:checked")).map((b) => b.value);
   const others = (S.settings.blockedSlots || []).filter((b) => b.dateKey !== date);
   const mine = checked.map((t) => ({ dateKey: date, time: t }));
-  saveSettings({ ...S.settings, blockedSlots: [...others, ...mine].sort((a, b) => (a.dateKey + a.time).localeCompare(b.dateKey + b.time)) });
-  flash("予約不可の時間を更新しました");
+  try {
+    await saveSettingsRemote({ blockedSlots: [...others, ...mine].sort((a, b) => (a.dateKey + a.time).localeCompare(b.dateKey + b.time)) });
+    flash("予約不可の時間を更新しました");
+  } catch (e) { handleAdminError(e); render(); }
+}
+
+// ---- パスコード変更 ----
+async function adminChangePinFromInputs() {
+  const oldEl = document.getElementById("pin-old-input");
+  const newEl = document.getElementById("pin-new-input");
+  const oldPin = oldEl ? oldEl.value.trim() : "";
+  const newPin = newEl ? newEl.value.trim() : "";
+  if (newPin.length < 4) { flash("新しいパスコードは4文字以上にしてください"); return; }
+  try {
+    await rpc("admin_change_pin", { p_old_pin: oldPin, p_new_pin: newPin });
+    S.adminPin = newPin;
+    try { sessionStorage.setItem("totonoe:adminPin", newPin); } catch (e) {}
+    if (oldEl) oldEl.value = "";
+    if (newEl) newEl.value = "";
+    flash("パスコードを変更しました");
+  } catch (e) { handleAdminError(e); render(); }
 }
 
 // ============================================================
 // 描画
 // ============================================================
 function textSizeToggleHtml() {
-  const v = S.settings.textSize === "large" ? "large" : "base";
+  const v = S.textSize === "large" ? "large" : "base";
   return `<div class="topbar"><div class="textsize-toggle" role="group" aria-label="文字サイズ">
     <button class="${v === "base" ? "active" : ""}" onclick="setTextSize('base')" aria-pressed="${v === "base"}">文字 標準</button>
     <button class="${v === "large" ? "active" : ""}" onclick="setTextSize('large')" aria-pressed="${v === "large"}">文字 大</button>
@@ -732,8 +850,10 @@ function screenBook() {
         h += `<p id="time-heading" style="scroll-margin-top:12px;font-size:var(--fs-base);font-weight:600;margin-top:24px;margin-bottom:10px;">時間を選ぶ　${formatDateJP(S.date)}</p><div class="timelist">`;
         const rows = [];
         for (let m = BUSINESS_HOURS.start * 60; m <= BUSINESS_HOURS.end * 60 - SLOT_INTERVAL; m += SLOT_INTERVAL) rows.push(`${pad(Math.floor(m / 60))}:${pad(m % 60)}`);
+        const dateKey = toDateKey(S.date);
+        const dayBookings = S.publicBookings.filter((b) => b.dateKey === dateKey);
         rows.forEach((t) => {
-          const reason = slotReason(mn, S.bookings[toDateKey(S.date)] || [], S.date, t);
+          const reason = slotReason(mn, dayBookings, S.date, t);
           const avail = reason === null;
           const sel = S.time === t;
           const label = sel ? "選択中" : avail ? "予約できます" : reason === "taken" ? "予約済み" : reason === "past" ? "受付終了" : "対象外";
@@ -770,6 +890,7 @@ function screenBook() {
 
 function screenMypage() {
   let h = '<div class="screen-body flush">';
+  if (S.savedFlash) h += `<div style="padding:0 22px;margin-top:12px;"><p class="note note-warn">${esc(S.savedFlash)}</p></div>`;
   h += `<div class="banner" style="border-radius:0;padding:22px 22px 30px;">${LeafDeco}`;
   h += '<p class="eyebrow" style="color:#fff;opacity:0.75;">マイページ</p>';
   h += `<div style="display:flex;align-items:center;gap:12px;margin-top:4px;"><div style="width:44px;height:44px;border-radius:50%;background:rgba(255,255,255,0.18);display:flex;align-items:center;justify-content:center;font-size:var(--fs-md);color:#fff;">${S.profile.name ? esc(S.profile.name[0]) : IconUser(20)}</div>`;
@@ -862,13 +983,13 @@ function adminShellHtml() {
       <p class="muted" style="font-size:var(--fs-sm);margin-bottom:20px;">パスコードを入力してください</p>
       <label class="field"><input id="pin-input" type="password" inputmode="numeric" placeholder="パスコード" style="letter-spacing:0.3em;" onkeydown="if(event.key==='Enter')doAdminLoginFromInput()"></label>
       <p id="pin-error" style="display:none;font-size:var(--fs-sm);color:var(--cancel-text);margin:-8px 0 12px;">パスコードが違います</p>
-      <button class="btn btn-primary" onclick="doAdminLoginFromInput()">ログイン</button>
-      <p class="note note-moss" style="margin-top:16px;">本番公開時は、この画面に必ずログイン保護を設けます（要件書7章）。現在は暫定のパスコード方式です。</p>
+      <button id="pin-login-btn" class="btn btn-primary" onclick="doAdminLoginFromInput()">ログイン</button>
+      <p class="note note-moss" style="margin-top:16px;">パスコードはSupabase側で確認されます。お客様の端末からは予約データ・設定の変更はできません。</p>
       <button class="btn-text" style="margin-top:14px;color:var(--ink-soft);display:block;" onclick="leaveAdmin()">予約アプリに戻る</button>
     </div></div></div>`;
   }
 
-  const all = allBookingsFlat();
+  const all = S.adminBookings;
   const todayKey = toDateKey(new Date());
   const asc = (a, b) => (a.dateKey + a.start).localeCompare(b.dateKey + b.start);
   const pending = all.filter((b) => b.status === "pending").sort(asc);
@@ -956,13 +1077,21 @@ function adminShellHtml() {
   });
   h += '<div style="display:flex;gap:8px;margin:12px 0 0;"><button class="admin-btn admin-btn-approve" onclick="adminSaveMenuItems()">メニューを保存する</button><button class="admin-btn admin-btn-cancel" onclick="adminResetMenuItems()">初期値に戻す</button></div>';
 
-  h += '<div class="admin-section-title">連絡先・SNSリンクの編集</div><p class="muted" style="font-size:var(--fs-xs);margin:-4px 0 10px;">頻繁に変更するものではないため、一番下にまとめています</p><div class="admin-row">';
+  h += '<div class="admin-section-title">連絡先・SNSリンクの編集</div><p class="muted" style="font-size:var(--fs-xs);margin:-4px 0 10px;">頻繁に変更するものではないため、下の方にまとめています</p><div class="admin-row">';
   [["phone", "電話番号"], ["email", "メールアドレス"], ["instagram", "Instagram URL"], ["website", "ホームページ URL"]].forEach(([key, label]) => {
     h += `<label style="display:block;margin-bottom:10px;"><span class="admin-fieldlabel">${label}</span><input id="contact-${key}" class="admin-input" value="${esc(ci[key] || "")}"></label>`;
   });
   h += '<div class="admin-actions"><button class="admin-btn admin-btn-approve" onclick="adminSaveContact()">連絡先を更新する</button></div></div>';
 
-  h += '<p class="muted" style="font-size:var(--fs-xs);line-height:1.7;margin-top:20px;">※このプロトタイプでは予約データはこの端末のブラウザ内（localStorage）にのみ保存され、他の端末とは同期しません。本番公開時は Supabase 等のデータベースに置き換える想定です（要件書7章）。</p>';
+  h += '<div class="admin-section-title">パスコードの変更</div>';
+  h += '<div class="admin-row">';
+  h += '<p class="muted" style="font-size:var(--fs-xs);margin:0 0 10px;">初期パスコードのままにせず、運用前に必ず変更してください。</p>';
+  h += '<label style="display:block;margin-bottom:10px;"><span class="admin-fieldlabel">現在のパスコード</span><input id="pin-old-input" class="admin-input" type="password" inputmode="numeric"></label>';
+  h += '<label style="display:block;margin-bottom:10px;"><span class="admin-fieldlabel">新しいパスコード（4文字以上）</span><input id="pin-new-input" class="admin-input" type="password" inputmode="numeric"></label>';
+  h += '<button class="admin-btn admin-btn-approve" onclick="adminChangePinFromInputs()">パスコードを変更する</button>';
+  h += '</div>';
+
+  h += '<p class="muted" style="font-size:var(--fs-xs);line-height:1.7;margin-top:20px;">予約データ・設定はSupabase（データベース）に保存され、お客様・管理者のどちらからも同じ内容が見えます。未対応：実メール送信（Resend）・前日リマインド（要件書7・8章）。</p>';
   h += "</div></div>";
   return `<div class="totonoe-shell">${h}</div>`;
 }
@@ -975,14 +1104,60 @@ function render() {
   const keep = key === prevScrollKey;
   prevScrollKey = key;
 
-  const textSize = S.settings.textSize === "large" ? "large" : "base";
+  const textSize = S.textSize === "large" ? "large" : "base";
   const root = document.getElementById("root");
+
+  if (S.loading) {
+    root.innerHTML = `<div class="totonoe" data-textsize="${textSize}"><div class="totonoe-loading">${IconSpinner(32)}</div></div>`;
+    return;
+  }
+  if (S.loadError) {
+    root.innerHTML = `<div class="totonoe" data-textsize="${textSize}"><div class="totonoe-loading" style="flex-direction:column;gap:16px;padding:24px;text-align:center;">
+      <p style="font-size:var(--fs-base);color:var(--ink);">読み込みに失敗しました。<br>電波状況をご確認のうえ、もう一度お試しください。</p>
+      <button class="btn btn-primary" style="width:auto;padding:0 24px;" onclick="location.reload()">再読み込み</button>
+    </div></div>`;
+    return;
+  }
+
   root.innerHTML = `<div class="totonoe" data-textsize="${textSize}">${S.route === "admin" ? adminShellHtml() : appShellHtml()}</div>`;
 
   if (keep) { const el = document.querySelector(".screen-scroll"); if (el) el.scrollTop = savedScroll; }
 }
 
-render();
+async function boot() {
+  render();
+  try {
+    const [settingsRows, bookingRows] = await Promise.all([
+      rpc("get_public_settings", {}),
+      rpc("list_bookings_public", {}),
+    ]);
+    const s = (settingsRows && settingsRows[0]) || {};
+    S.settings = {
+      announcement: s.announcement || "",
+      contactInfo: { ...DEFAULT_SETTINGS.contactInfo, ...(s.contact_info || {}) },
+      closedDates: Array.isArray(s.closed_dates) ? s.closed_dates : [],
+      blockedSlots: Array.isArray(s.blocked_slots) ? s.blocked_slots : [],
+      menuItems: Array.isArray(s.menu_items) ? s.menu_items : [],
+    };
+    S.publicBookings = (bookingRows || []).map((r) => ({ dateKey: r.date_key, start: r.start_time, end: r.end_time, status: r.status }));
+  } catch (e) {
+    S.loading = false; S.loadError = true; render(); return;
+  }
+
+  if (normPhone(S.profile.phone)) { await refreshMyBookings(); }
+
+  if (S.route === "admin" && S.adminPin) {
+    try {
+      const ok = await rpc("admin_verify_pin", { p_pin: S.adminPin });
+      if (ok) { S.adminAuthed = true; await refreshAdminBookings(); }
+      else { S.adminPin = ""; try { sessionStorage.removeItem("totonoe:adminPin"); } catch (err) {} }
+    } catch (e) { /* 失敗時はパスコード入力画面を表示する */ }
+  }
+
+  S.loading = false;
+  render();
+}
+boot();
 
 // PWA: ホーム画面に追加できるようにするための最小限のService Worker登録
 if ("serviceWorker" in navigator) {
