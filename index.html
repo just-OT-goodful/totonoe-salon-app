@@ -67,6 +67,11 @@
     position: relative;
   }
 
+  @media (min-width: 900px) {
+    .totonoe-shell { max-width: 720px; box-shadow: 0 0 0 1px var(--line); }
+    .totonoe-shell.admin-wide { max-width: 1000px; }
+  }
+
   .screen { flex: 1; display: flex; flex-direction: column; min-height: 0; }
   .screen-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
   .screen-body { padding: 20px 22px 28px; }
@@ -1156,7 +1161,7 @@ function adminShellHtml() {
 
   h += '<p class="muted" style="font-size:var(--fs-xs);line-height:1.7;margin-top:20px;">予約データ・設定はSupabase（データベース）に保存され、お客様・管理者のどちらからも同じ内容が見えます。未対応：実メール送信（Resend）・前日リマインド（要件書7・8章）。</p>';
   h += "</div></div>";
-  return `<div class="totonoe-shell">${h}</div>`;
+  return `<div class="totonoe-shell admin-wide">${h}</div>`;
 }
 
 let prevScrollKey = null;
