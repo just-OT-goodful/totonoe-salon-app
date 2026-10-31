@@ -732,6 +732,33 @@ async function doAdminLoginFromInput() {
   try { await refreshAdminBookings(); } catch (e) {}
   render();
 }
+// ---- バックアップ（予約データ・設定をファイルとして保存する） ----
+function downloadFile(filename, text, mime) {
+  const blob = new Blob([text], { type: mime });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+async function adminDownloadBackup(kind) {
+  const stamp = toDateKey(new Date());
+  try {
+    const rows = await rpc("admin_list_bookings", { p_pin: S.adminPin });
+    if (kind === "csv") {
+      const cols = [["date_key", "日付"], ["start_time", "開始"], ["end_time", "終了"], ["name", "お名前"], ["phone", "電話番号"], ["email", "メール"], ["menu_name", "メニュー"], ["price", "料金"], ["status", "状態"], ["created_at", "申込日時"]];
+      const q = (v) => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`;
+      const lines = [cols.map((c) => q(c[1])).join(",")].concat(rows.map((r) => cols.map((c) => q(r[c[0]])).join(",")));
+      downloadFile(`整えサロン_予約一覧_${stamp}.csv`, "﻿" + lines.join("\r\n"), "text/csv;charset=utf-8");
+    } else {
+      const s = (await rpc("get_public_settings", {}))[0] || {};
+      const data = { exportedAt: new Date().toISOString(), bookings: rows, settings: s };
+      downloadFile(`整えサロン_バックアップ_${stamp}.json`, JSON.stringify(data, null, 2), "application/json");
+    }
+    flash("ファイルを保存しました（ダウンロードフォルダをご確認ください）");
+  } catch (e) { handleAdminError(e); render(); }
+}
+
 function adminLogout() {
   S.adminAuthed = false; S.adminPin = ""; S.adminNotice = null; S.adminBookings = [];
   try { sessionStorage.removeItem("totonoe:adminPin"); } catch (e) {}
@@ -1212,15 +1239,19 @@ function adminShellHtml() {
   });
   h += '<div class="admin-actions"><button class="admin-btn admin-btn-approve" onclick="adminSaveContact()">連絡先を更新する</button></div></div>';
 
+  h += '<div class="admin-section-title">バックアップ（データの控え）</div>';
+  h += '<div class="admin-row"><p class="muted" style="font-size:var(--fs-xs);margin:0 0 10px;line-height:1.7;">予約データとサロン設定をパソコン・スマホに保存します。月に1回ほどを目安に、保存したファイルをOneDriveなどに残してください（手順は docs/バックアップ手順.md）。</p>';
+  h += '<div class="admin-actions"><button class="admin-btn admin-btn-approve" onclick="adminDownloadBackup(\'json\')">全データを保存（JSON）</button><button class="admin-btn admin-btn-cancel" onclick="adminDownloadBackup(\'csv\')">予約一覧を保存（Excel用）</button></div></div>';
+
   h += '<div class="admin-section-title">パスコードの変更</div>';
   h += '<div class="admin-row">';
   h += '<p class="muted" style="font-size:var(--fs-xs);margin:0 0 10px;">初期パスコードのままにせず、運用前に必ず変更してください。</p>';
   h += '<label style="display:block;margin-bottom:10px;"><span class="admin-fieldlabel">現在のパスコード</span><input id="pin-old-input" class="admin-input" type="password" inputmode="numeric"></label>';
-  h += '<label style="display:block;margin-bottom:10px;"><span class="admin-fieldlabel">新しいパスコード（4文字以上）</span><input id="pin-new-input" class="admin-input" type="password" inputmode="numeric"></label>';
+  h += '<label style="display:block;margin-bottom:10px;"><span class="admin-fieldlabel">新しいパスコード（6文字以上）</span><input id="pin-new-input" class="admin-input" type="password" inputmode="numeric"></label>';
   h += '<button class="admin-btn admin-btn-approve" onclick="adminChangePinFromInputs()">パスコードを変更する</button>';
   h += '</div>';
 
-  h += '<p class="muted" style="font-size:var(--fs-xs);line-height:1.7;margin-top:20px;">予約データ・設定はSupabase（データベース）に保存され、お客様・管理者のどちらからも同じ内容が見えます。未対応：実メール送信（Resend）・前日リマインド（要件書7・8章）。</p>';
+  h += '<p class="muted" style="font-size:var(--fs-xs);line-height:1.7;margin-top:20px;">予約データ・設定はSupabase（データベース）に保存され、お客様・管理者のどちらからも同じ内容が見えます。</p>';
   h += "</div></div>";
   return `<div class="totonoe-shell admin-wide">${h}</div>`;
 }
