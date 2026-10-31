@@ -67,9 +67,34 @@
     position: relative;
   }
 
+  .home-grid > * + * { margin-top: 12px; }
+
+  /* ---- パソコン表示：左にメニュー、右に内容 ---- */
   @media (min-width: 900px) {
-    .totonoe-shell { max-width: 720px; box-shadow: 0 0 0 1px var(--line); }
+    .totonoe-shell { max-width: 1120px; box-shadow: 0 0 0 1px var(--line); }
     .totonoe-shell.admin-wide { max-width: 1000px; }
+    .screen { display: grid; grid-template-columns: 240px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
+    .screen-scroll { grid-column: 2; grid-row: 1; }
+    .bottomdock { display: contents; }
+    .actionbar { grid-column: 2; grid-row: 2; padding: 16px 48px; }
+    .actionbar .btn { max-width: 420px; margin: 0 auto; display: flex; }
+    .navbar { grid-column: 1; grid-row: 1 / span 2; flex-direction: column; justify-content: flex-start; gap: 6px; border-top: none; border-right: 1px solid var(--line); padding: 28px 16px; }
+    .navbar::before { content: "整えサロン"; font-family: 'Zen Old Mincho', 'Yu Mincho', serif; font-size: 26px; font-weight: 600; color: var(--moss); padding: 0 12px 22px; letter-spacing: 0.08em; }
+    .navbtn { flex-direction: row; justify-content: flex-start; gap: 14px; width: 100%; min-height: 58px; padding: 0 16px; }
+    .navbtn:hover { background: var(--moss-tint); }
+    .navbtn.active { background: var(--moss-tint); }
+    .navbtn span { font-size: var(--fs-base); }
+    .screen-body { padding: 24px 48px 40px; }
+    .screen-body.flush { padding: 0 0 40px; }
+    .topbar { padding: 16px 48px 0; }
+    .menulist { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .menulist .menuitem + .menuitem { margin-top: 0; }
+    .menuitem:hover { border-color: var(--moss); }
+    .datewrap { grid-template-columns: repeat(6, 1fr); }
+    .timelist { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .home-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: stretch; }
+    .home-grid > * { margin: 0 !important; }
+    .btn:hover:not(:disabled), .datecard:hover:not(.off), .timerow:hover:not(.off), .chip:hover { filter: brightness(0.96); }
   }
 
   .screen { flex: 1; display: flex; flex-direction: column; min-height: 0; }
@@ -793,21 +818,22 @@ function screenHome() {
   h += '<p class="eyebrow">WELCOME</p>';
   h += `<h1 class="serif">${esc(SALON_NAME)}</h1>`;
   h += '<p class="tagline">作業療法士が、根本から丁寧に整えます。</p>';
-  h += `<div class="card" style="display:flex;align-items:center;gap:13px;margin-top:18px;"><div class="avatar">${S.profile.name ? esc(S.profile.name[0]) : IconUser(20)}</div><p style="font-size:var(--fs-base);font-weight:500;">こんにちは、${S.profile.name ? esc(S.profile.name) + "様" : "ゲスト様"}</p></div>`;
+  h += '<div class="home-grid" style="margin-top:18px;">';
+  h += `<div class="card" style="display:flex;align-items:center;gap:13px;"><div class="avatar">${S.profile.name ? esc(S.profile.name[0]) : IconUser(20)}</div><p style="font-size:var(--fs-base);font-weight:500;">こんにちは、${S.profile.name ? esc(S.profile.name) + "様" : "ゲスト様"}</p></div>`;
   if (nb) {
     h += `<div class="card" style="background:var(--moss-tint);border-color:var(--moss-tint);"><p class="eyebrow" style="margin-bottom:8px;">つぎのご予約</p>`;
     h += `<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;"><p style="font-size:var(--fs-base);line-height:1.6;font-weight:500;">${nb.dateKey.replace(/-/g, "/")} ${nb.start} 〜<br>${esc(nb.menuName)}</p><span class="pill ${statusPillClass(nb.status, nb.dateKey)}">${statusLabel(nb.status)}</span></div>`;
     h += `<button class="btn btn-outline" style="margin-top:14px;width:100%;" onclick="changeTab('mypage')">詳しく見る</button></div>`;
   }
-  h += `<div class="banner" style="margin-top:12px;">${LeafDeco}`;
+  h += `<button class="card" style="width:100%;text-align:left;display:flex;justify-content:space-between;align-items:center;cursor:pointer;font-family:inherit;min-height:var(--tap);" onclick="changeTab('mypage')"><span style="font-size:var(--fs-base);font-weight:500;">ご来店履歴を見る</span><span class="muted" style="font-size:20px;">›</span></button>`;
+  h += `<div class="banner" style="grid-column:1 / -1;">${LeafDeco}`;
   if (lastMenu) {
     h += `<p class="eyebrow" style="color:#fff;opacity:0.8;">前回のご利用メニュー</p><p class="serif" style="font-size:var(--fs-lg);line-height:1.4;color:#fff;">${esc(lastMenu.name)}</p><p style="font-size:var(--fs-sm);opacity:0.9;margin-top:8px;">${lastMenu.duration}分 ／ ¥${lastMenu.price.toLocaleString()}</p><button class="btn" style="margin-top:16px;background:#fff;color:var(--moss-deep);" onclick="startFlow('${lastMenu.id}')">同じメニューでもう一度予約</button>`;
   } else {
     h += `<p class="eyebrow" style="color:#fff;opacity:0.8;">はじめての方に</p><p class="serif" style="font-size:var(--fs-xl);line-height:1.4;color:#fff;">おためし相談<br>コース</p><p style="font-size:var(--fs-sm);opacity:0.9;margin-top:8px;">60分 ／ ¥2,000</p><button class="btn" style="margin-top:16px;background:#fff;color:var(--moss-deep);" onclick="startFlow('f1')">ご予約はこちら</button>`;
   }
   h += `</div>`;
-  h += `<button class="card" style="width:100%;text-align:left;display:flex;justify-content:space-between;align-items:center;cursor:pointer;margin-top:12px;font-family:inherit;min-height:var(--tap);" onclick="changeTab('mypage')"><span style="font-size:var(--fs-base);font-weight:500;">ご来店履歴を見る</span><span class="muted" style="font-size:20px;">›</span></button>`;
-  h += "</div>";
+  h += "</div></div>";
   return h;
 }
 
@@ -868,12 +894,14 @@ function screenBook() {
     h += "</div>";
     const items = currentMenuItems();
     const list = S.category === "all" ? items : items.filter((m) => m.cat === S.category);
+    h += '<div class="menulist">';
     list.forEach((m) => {
       h += `<button class="menuitem ${S.menuId === m.id ? "sel" : ""}" onclick="selectMenu('${m.id}')" aria-pressed="${S.menuId === m.id}">`;
       h += `<span class="menuitem-check">${CheckMark}</span><span class="menuitem-body">`;
       h += `<span class="menuitem-name">${esc(m.name)}</span><span class="menuitem-meta">所要時間　${m.duration}分</span>`;
       h += `<span class="menuitem-desc">${esc(m.desc)}</span><span class="menuitem-price">¥${m.price.toLocaleString()}</span></span></button>`;
     });
+    h += "</div>";
   }
 
   if (S.flowStep === 1) {
