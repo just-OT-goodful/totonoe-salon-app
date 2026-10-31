@@ -332,9 +332,11 @@ const DOW = ["日", "月", "火", "水", "木", "金", "土"];
 function dowJP(d) { return DOW[d.getDay()]; }
 function formatDateJP(d) { return `${d.getMonth() + 1}月${d.getDate()}日（${dowJP(d)}）`; }
 function daysFromNow(n) { const d = new Date(); d.setDate(d.getDate() + n); d.setHours(0, 0, 0, 0); return d; }
-function normPhone(p) { return (p || "").replace(/[^0-9]/g, ""); }
+function normPhone(p) { return (p || "").normalize("NFKC").replace(/[^0-9]/g, ""); }
+function validEmail(e) { return !e || /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e); }
+function isPlaceholderContact(v) { return !v || /0000-0000|\.example\.com|example\.com/.test(v); }
 function makeBookingId(dateKey, time) { return `${dateKey.replace(/-/g, "")}-${time.replace(":", "")}-${Math.random().toString(36).slice(2, 6)}`; }
-function cancelDeadlinePassed(dateKey) { return new Date() >= new Date(`${dateKey}T00:00:00`); }
+function cancelDeadlinePassed(dateKey) { return new Date() >= new Date(`${dateKey}T00:00:00+09:00`); }
 function isFuture(dateKey) { return dateKey >= toDateKey(new Date()); }
 function statusLabel(status) { return { pending: "承認待ち", confirmed: "確定", cancelled: "キャンセル済み" }[status] || status; }
 function statusPillClass(status, dateKey) {
@@ -466,7 +468,7 @@ async function refreshPublicBookings() {
 async function refreshMyBookings() {
   if (!normPhone(S.profile.phone)) { S.myBookings = []; return; }
   try {
-    const rows = await rpc("my_bookings", { p_phone: S.profile.phone });
+    const rows = await rpc("my_bookings", { p_phone: S.profile.phone, p_name: S.profile.name });
     S.myBookings = (rows || []).map(mapBookingRow);
   } catch (e) { /* 失敗時は直前のキャッシュのまま */ }
 }
@@ -536,7 +538,18 @@ function canNext() {
   if (S.flowStep === 2) return !!(S.form.name.trim() && S.form.phone.trim());
   return true;
 }
+function formProblem() {
+  const d = normPhone(S.form.phone);
+  if (d.length < 10 || d.length > 11) return "電話番号は10〜11桁の数字でご入力ください（例：090-1234-5678）";
+  if (!validEmail(S.form.email.trim())) return "メールアドレスの形式をご確認ください（例：example@mail.com）";
+  return "";
+}
 function goNext() {
+  if (S.flowStep === 2) {
+    const p = formProblem();
+    if (p) { S.error = p; render(); return; }
+    S.error = "";
+  }
   if (S.flowStep === 1 && isReturning()) {
     S.form = { name: S.profile.name, phone: S.profile.phone, email: S.profile.email || "" };
     S.flowStep = 3; render(); return;
@@ -562,8 +575,17 @@ async function submitRequest() {
     });
   } catch (e) {
     S.saving = false;
-    S.error = (e.message === "slot_taken" || e.message === "blocked_slot" || e.message === "closed_date")
-      ? "申し訳ありません。この時間は直前に埋まりました。別の時間をお選びください。"
+    const m = e && e.message;
+    if (m === "invalid_phone" || m === "invalid_email" || m === "invalid_name") {
+      S.error = "お客様情報をご確認ください（電話番号は10〜11桁、メールは正しい形式で）。";
+      S.flowStep = 2; render(); return;
+    }
+    if (m === "too_many_pending") {
+      S.error = "承認待ちのご予約が多くなっています。承認後に改めてお申し込みいただくか、お電話でご相談ください。";
+      S.flowStep = 3; render(); return;
+    }
+    S.error = (m === "slot_taken" || m === "blocked_slot" || m === "closed_date" || m === "past_date" || m === "outside_hours")
+      ? "申し訳ありません。この時間はご予約いただけません。別の時間をお選びください。"
       : "通信エラーが発生しました。電波の良い場所でもう一度お試しください。";
     S.time = null; S.flowStep = 1;
     await refreshPublicBookings();
@@ -636,16 +658,22 @@ async function doAdminLoginFromInput() {
   const btn = document.getElementById("pin-login-btn");
   const pin = el ? el.value.trim() : "";
   if (btn) btn.disabled = true;
-  let ok = false;
-  try { ok = await rpc("admin_verify_pin", { p_pin: pin }); } catch (e) { ok = false; }
-  if (!ok) {
-    const err = document.getElementById("pin-error"); if (err) err.style.display = "block";
+  let res = null;
+  try { res = await rpc("admin_login", { p_pin: pin }); } catch (e) { res = null; }
+  if (!res || !res.ok) {
+    const err = document.getElementById("pin-error");
+    if (err) {
+      err.textContent = res && res.locked ? "入力を連続で間違えたため、15分間ロックされました。しばらくしてからお試しください。" : "パスコードが違います";
+      err.style.display = "block";
+    }
     if (el) { el.style.borderColor = "#E3B08C"; el.focus(); }
     if (btn) btn.disabled = false;
     return;
   }
-  S.adminAuthed = true; S.adminPin = pin;
-  try { sessionStorage.setItem("totonoe:adminPin", pin); } catch (e) {}
+  const token = res.token;
+  S.adminAuthed = true; S.adminPin = token;
+  try { sessionStorage.setItem("totonoe:adminPin", token); } catch (e) {}
+  if (res.default_pin) { S.savedFlash = "初期パスコードのままです。「パスコードの変更」から必ず変更してください。"; setTimeout(() => { S.savedFlash = ""; render(); }, 8000); }
   try { await refreshAdminBookings(); } catch (e) {}
   render();
 }
@@ -729,11 +757,9 @@ async function adminChangePinFromInputs() {
   const newEl = document.getElementById("pin-new-input");
   const oldPin = oldEl ? oldEl.value.trim() : "";
   const newPin = newEl ? newEl.value.trim() : "";
-  if (newPin.length < 4) { flash("新しいパスコードは4文字以上にしてください"); return; }
+  if (newPin.length < 6) { flash("新しいパスコードは6文字以上にしてください"); return; }
   try {
-    await rpc("admin_change_pin", { p_old_pin: oldPin, p_new_pin: newPin });
-    S.adminPin = newPin;
-    try { sessionStorage.setItem("totonoe:adminPin", newPin); } catch (e) {}
+    await rpc("admin_change_pin", { p_token: S.adminPin, p_old_pin: oldPin, p_new_pin: newPin });
     if (oldEl) oldEl.value = "";
     if (newEl) newEl.value = "";
     flash("パスコードを変更しました");
@@ -786,15 +812,19 @@ function screenContact() {
   h += '<p class="eyebrow">CONTACT</p><h2 class="serif">お問合せ</h2>';
   h += '<p class="muted" style="font-size:var(--fs-sm);margin:8px 0 18px;line-height:1.7;">ご予約前のご相談やご不明な点は、お電話・メールにてお気軽にご連絡ください</p>';
   h += `<div class="card"><p class="eyebrow">お電話</p><p class="serif" style="font-size:var(--fs-xl);margin:2px 0 8px;color:var(--moss);">${esc(ci.phone)}</p>`;
-  h += `<p class="muted" style="font-size:var(--fs-sm);margin-bottom:16px;">受付時間　${pad(BUSINESS_HOURS.start)}:00〜${pad(BUSINESS_HOURS.end)}:00（日曜定休）</p>`;
+  h += `<p class="muted" style="font-size:var(--fs-sm);margin-bottom:16px;">受付時間　${pad(BUSINESS_HOURS.start)}:00〜${pad(BUSINESS_HOURS.end)}:00（不定休・営業日はご予約画面でご確認ください）</p>`;
   h += `<a href="tel:${normPhone(ci.phone)}" class="btn btn-primary" style="text-decoration:none;">電話をかける</a></div>`;
   h += `<div class="card"><p class="eyebrow">メール</p><p style="font-size:var(--fs-base);margin:2px 0 14px;word-break:break-all;">${esc(ci.email)}</p>`;
-  h += `<a href="mailto:${ci.email}?subject=${encodeURIComponent("お問合せ")}" class="btn btn-outline" style="text-decoration:none;width:100%;">メールを送る</a></div>`;
-  h += `<div class="card"><p class="eyebrow">SNS・ホームページ</p><p class="muted" style="font-size:var(--fs-sm);margin-bottom:14px;">日々の施術の様子やお知らせも発信しています</p>`;
-  h += `<a href="${esc(ci.instagram)}" target="_blank" rel="noopener noreferrer" class="btn btn-outline" style="text-decoration:none;width:100%;margin-bottom:8px;">Instagramを見る</a>`;
-  h += `<a href="${esc(ci.website)}" target="_blank" rel="noopener noreferrer" class="btn btn-outline" style="text-decoration:none;width:100%;">ホームページを見る</a></div>`;
-  h += '<p class="muted" style="font-size:var(--fs-xs);margin-top:12px;">※連絡先・SNS等のリンクは仮の値です（本番公開時に差し替え）</p>';
-  h += '<button class="btn-text" style="margin-top:10px;color:var(--ink-soft);display:block;" onclick="goAdmin()">サロン管理者の方はこちら</button>';
+  h += `<a href="mailto:${esc(ci.email)}?subject=${encodeURIComponent("お問合せ")}" class="btn btn-outline" style="text-decoration:none;width:100%;">メールを送る</a></div>`;
+  const hasSns = !isPlaceholderContact(ci.instagram) || !isPlaceholderContact(ci.website);
+  if (hasSns) {
+    h += `<div class="card"><p class="eyebrow">SNS・ホームページ</p><p class="muted" style="font-size:var(--fs-sm);margin-bottom:14px;">日々の施術の様子やお知らせも発信しています</p>`;
+    if (!isPlaceholderContact(ci.instagram)) h += `<a href="${esc(ci.instagram)}" target="_blank" rel="noopener noreferrer" class="btn btn-outline" style="text-decoration:none;width:100%;margin-bottom:8px;">Instagramを見る</a>`;
+    if (!isPlaceholderContact(ci.website)) h += `<a href="${esc(ci.website)}" target="_blank" rel="noopener noreferrer" class="btn btn-outline" style="text-decoration:none;width:100%;">ホームページを見る</a>`;
+    h += `</div>`;
+  }
+  h += `<div class="card"><p class="eyebrow">キャンセルについて</p><p style="font-size:var(--fs-sm);line-height:1.8;">ご予約の前日24:00までは、マイページからお客様ご自身でキャンセルいただけます。それ以降のキャンセル・変更は、お電話でご連絡ください。</p></div>`;
+  h += `<div class="card"><p class="eyebrow">個人情報の取り扱い</p><p style="font-size:var(--fs-sm);line-height:1.8;">ご入力いただいたお名前・電話番号・メールアドレスは、ご予約の確認とご連絡の目的のみに使用し、第三者へ提供することはありません。</p></div>`;
   h += "</div>";
   return h;
 }
@@ -881,6 +911,7 @@ function screenBook() {
     h += `<label class="field"><span class="lbl">お名前 <span class="req">必須</span></span><input value="${esc(S.form.name)}" placeholder="山田 太郎" oninput="updateForm('name',this.value)"></label>`;
     h += `<label class="field"><span class="lbl">電話番号 <span class="req">必須</span></span><input value="${esc(S.form.phone)}" placeholder="090-1234-5678" inputmode="tel" oninput="updateForm('phone',this.value)"></label>`;
     h += `<label class="field"><span class="lbl">メールアドレス <span class="opt">任意</span></span><input value="${esc(S.form.email)}" placeholder="example@mail.com" inputmode="email" oninput="updateForm('email',this.value)"></label>`;
+    h += '<p class="muted" style="font-size:var(--fs-xs);line-height:1.7;">ご入力の情報は、ご予約の確認・ご連絡の目的のみに使用します。ご予約の前日24:00までは、マイページからキャンセルできます。</p>';
     h += "</div>";
   }
 
@@ -1166,7 +1197,7 @@ async function boot() {
 
   if (S.route === "admin" && S.adminPin) {
     try {
-      const ok = await rpc("admin_verify_pin", { p_pin: S.adminPin });
+      const ok = await rpc("admin_verify_pin", { p_pin: S.adminPin }); // p_pin にはログイン時のトークンを渡す
       if (ok) { S.adminAuthed = true; await refreshAdminBookings(); }
       else { S.adminPin = ""; try { sessionStorage.removeItem("totonoe:adminPin"); } catch (err) {} }
     } catch (e) { /* 失敗時はパスコード入力画面を表示する */ }

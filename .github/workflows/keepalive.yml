@@ -1,0 +1,18 @@
+# Supabase無料プランは1週間アクセスがないと自動停止するため、毎日1回、公開用の関数を呼んで停止を防ぐ
+name: Supabase keep-alive
+
+on:
+  schedule:
+    - cron: "0 3 * * *" # 毎日 12:00（日本時間）
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call get_public_settings
+        run: |
+          curl -fsS -X POST "https://idswizeiqkssqogmbwbz.supabase.co/rest/v1/rpc/get_public_settings" \
+            -H "apikey: sb_publishable_2L6dZVMV6TsP2mCfyPk75g_f1pZXMoJ" \
+            -H "Content-Type: application/json" \
+            -d '{}' > /dev/null
