@@ -473,6 +473,31 @@ function saveProfile(next) {
   try { localStorage.setItem("totonoe:profile", JSON.stringify(next)); } catch (e) {}
 }
 
+// マイページで履歴が空のとき（機種変更・別の端末など）に、電話番号とお名前で履歴を探す
+S.lookup = { name: "", phone: "", msg: "", busy: false };
+function updateLookup(field, val) { S.lookup[field] = val; }
+async function lookupHistory() {
+  const name = (S.lookup.name || S.profile.name || "").trim();
+  const phone = (S.lookup.phone || S.profile.phone || "").trim();
+  if (!name || normPhone(phone).length < 10) { S.lookup.msg = "お名前と電話番号（10〜11桁）をご入力ください。"; render(); return; }
+  S.lookup.busy = true; S.lookup.msg = ""; render();
+  try {
+    const rows = await rpc("my_bookings", { p_phone: phone, p_name: name });
+    if (!rows || rows.length === 0) {
+      S.lookup.msg = "ご予約が見つかりませんでした。予約時と同じお名前・電話番号かご確認ください。分からない場合は、お電話でお問い合わせください。";
+    } else {
+      saveProfile({ name, phone, email: S.profile.email || rows[0].email || "" });
+      S.myBookings = rows.map(mapBookingRow);
+      S.form = { ...S.profile };
+      S.lookup = { name: "", phone: "", msg: "", busy: false };
+    }
+  } catch (e) {
+    S.lookup.msg = "通信エラーが発生しました。電波の良い場所でもう一度お試しください。";
+  }
+  S.lookup.busy = false;
+  render();
+}
+
 function menu() { return currentMenuItems().find((m) => m.id === S.menuId); }
 function isReturning() { return !!(S.profile.name && S.profile.phone); }
 function myHistory() { return S.myBookings; }
@@ -972,7 +997,15 @@ function screenMypage() {
   h += `<p style="font-size:var(--fs-md);color:#fff;font-weight:500;">${S.profile.name ? esc(S.profile.name) + " 様" : "ゲスト様"}</p></div></div>`;
   h += '<div style="padding:0 22px;margin-top:-16px;padding-bottom:26px;"><div class="card"><p style="font-size:var(--fs-base);font-weight:600;margin-bottom:6px;">ご来店履歴</p>';
   const hist = myHistory().slice().reverse();
-  if (hist.length === 0) { h += '<p class="empty">まだ来店履歴がありません</p>'; }
+  if (hist.length === 0) {
+    h += '<p class="empty">この端末では、来店履歴が見つかりません</p>';
+    h += '<div style="border-top:1px solid var(--line);padding-top:16px;margin-top:6px;">';
+    h += '<p style="font-size:var(--fs-sm);line-height:1.7;margin-bottom:12px;">機種変更などで履歴が表示されない方は、ご予約時のお名前と電話番号を入力してください。</p>';
+    h += `<label class="field"><span class="lbl">お名前</span><input value="${esc(S.lookup.name || S.profile.name)}" placeholder="山田 太郎" oninput="updateLookup('name',this.value)"></label>`;
+    h += `<label class="field"><span class="lbl">電話番号</span><input value="${esc(S.lookup.phone || S.profile.phone)}" placeholder="090-1234-5678" inputmode="tel" oninput="updateLookup('phone',this.value)"></label>`;
+    if (S.lookup.msg) h += `<p class="note note-warn" style="margin-bottom:12px;">${esc(S.lookup.msg)}</p>`;
+    h += `<button class="btn btn-primary" ${S.lookup.busy ? "disabled" : ""} onclick="lookupHistory()">${S.lookup.busy ? "確認中…" : "履歴を見る"}</button></div>`;
+  }
   else {
     hist.forEach((b) => {
       const future = isFuture(b.dateKey);
