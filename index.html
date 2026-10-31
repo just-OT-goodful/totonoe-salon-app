@@ -69,34 +69,6 @@
 
   .home-grid > * + * { margin-top: 12px; }
 
-  /* ---- パソコン表示：左にメニュー、右に内容 ---- */
-  @media (min-width: 900px) {
-    .totonoe-shell { max-width: 1120px; box-shadow: 0 0 0 1px var(--line); }
-    .totonoe-shell.admin-wide { max-width: 1000px; }
-    .screen { display: grid; grid-template-columns: 240px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
-    .screen-scroll { grid-column: 2; grid-row: 1; }
-    .bottomdock { display: contents; }
-    .actionbar { grid-column: 2; grid-row: 2; padding: 16px 48px; }
-    .actionbar .btn { max-width: 420px; margin: 0 auto; display: flex; }
-    .navbar { grid-column: 1; grid-row: 1 / span 2; flex-direction: column; justify-content: flex-start; gap: 6px; border-top: none; border-right: 1px solid var(--line); padding: 28px 16px; }
-    .navbar::before { content: "整えサロン"; font-family: 'Zen Old Mincho', 'Yu Mincho', serif; font-size: 26px; font-weight: 600; color: var(--moss); padding: 0 12px 22px; letter-spacing: 0.08em; }
-    .navbtn { flex-direction: row; justify-content: flex-start; gap: 14px; width: 100%; min-height: 58px; padding: 0 16px; }
-    .navbtn:hover { background: var(--moss-tint); }
-    .navbtn.active { background: var(--moss-tint); }
-    .navbtn span { font-size: var(--fs-base); }
-    .screen-body { padding: 24px 48px 40px; }
-    .screen-body.flush { padding: 0 0 40px; }
-    .topbar { padding: 16px 48px 0; }
-    .menulist { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
-    .menulist .menuitem + .menuitem { margin-top: 0; }
-    .menuitem:hover { border-color: var(--moss); }
-    .datewrap { grid-template-columns: repeat(6, 1fr); }
-    .timelist { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .home-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: stretch; }
-    .home-grid > * { margin: 0 !important; }
-    .btn:hover:not(:disabled), .datecard:hover:not(.off), .timerow:hover:not(.off), .chip:hover { filter: brightness(0.96); }
-  }
-
   .screen { flex: 1; display: flex; flex-direction: column; min-height: 0; }
   .screen-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
   .screen-body { padding: 20px 22px 28px; }
@@ -256,6 +228,34 @@
   .mailcard-hint { font-size: var(--fs-xs); color: var(--ink-soft); line-height: 1.7; margin-top: 8px; }
 
   .pin-wrap { padding: 56px 26px 0; }
+
+  /* ---- パソコン表示：左にメニュー、右に内容（基本のCSSより後ろに置くこと） ---- */
+  @media (min-width: 900px) {
+    .totonoe-shell { max-width: 1120px; box-shadow: 0 0 0 1px var(--line); }
+    .totonoe-shell.admin-wide { max-width: 1000px; }
+    .screen { display: grid; grid-template-columns: 240px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
+    .screen-scroll { grid-column: 2; grid-row: 1; }
+    .bottomdock { display: contents; }
+    .actionbar { grid-column: 2; grid-row: 2; padding: 16px 48px; }
+    .actionbar .btn { max-width: 420px; margin: 0 auto; display: flex; }
+    .navbar { grid-column: 1; grid-row: 1 / span 2; flex-direction: column; justify-content: flex-start; gap: 6px; border-top: none; border-right: 1px solid var(--line); padding: 28px 16px; }
+    .navbar::before { content: "整えサロン"; font-family: 'Zen Old Mincho', 'Yu Mincho', serif; font-size: 26px; font-weight: 600; color: var(--moss); padding: 0 12px 22px; letter-spacing: 0.08em; }
+    .navbtn { flex-direction: row; justify-content: flex-start; gap: 14px; width: 100%; min-height: 58px; padding: 0 16px; }
+    .navbtn:hover { background: var(--moss-tint); }
+    .navbtn.active { background: var(--moss-tint); }
+    .navbtn span { font-size: var(--fs-base); }
+    .screen-body { padding: 24px 48px 40px; }
+    .screen-body.flush { padding: 0 0 40px; }
+    .topbar { padding: 16px 48px 0; }
+    .menulist { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .menulist .menuitem + .menuitem { margin-top: 0; }
+    .menuitem:hover { border-color: var(--moss); }
+    .datewrap { grid-template-columns: repeat(6, 1fr); }
+    .timelist { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .home-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: stretch; }
+    .home-grid > * { margin: 0 !important; }
+    .btn:hover:not(:disabled), .datecard:hover:not(.off), .timerow:hover:not(.off), .chip:hover { filter: brightness(0.96); }
+  }
 
   ::selection { background: #37432D33; }
 
