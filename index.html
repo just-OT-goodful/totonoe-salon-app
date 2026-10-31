@@ -1011,6 +1011,20 @@ function notificationPreviewHtml(notice) {
   return `<div class="mailcard"><div class="mailcard-head"><span>ご連絡方法</span><span>${esc(b.name || "お客様")} 様</span></div><div class="mailcard-body"><p class="mailcard-line">メールアドレスのご登録がないため、メールでの自動通知はできません。</p><p class="mailcard-line">電話（${esc(b.phone || "未登録")}）にて、${approved ? "確定" : "お受けできない旨"}をご連絡ください。</p></div></div><p class="mailcard-hint">メールアドレス未登録のお客様への通知手段は、要件書8章のとおりまだ確定していません。</p>`;
 }
 
+// 前日リマインド：Gmailの作成画面を開く（送信は Gmail の「送信日時を設定」で前日の朝などに予約する）
+function reminderGmailHref(b) {
+  const d = new Date(b.dateKey + "T00:00:00");
+  const when = `${d.getMonth() + 1}月${d.getDate()}日（${dowJP(d)}）${b.start}〜${b.end}`;
+  const tel = S.settings.contactInfo.phone;
+  const subject = `【整えサロン】明日のご予約のご案内（${d.getMonth() + 1}/${d.getDate()} ${b.start}）`;
+  const body = `${b.name} 様\n\nいつもありがとうございます。整えサロンです。\n明日のご予約についてご案内いたします。\n\n日時：${when}\nメニュー：${b.menuName}\n\nお会いできるのを楽しみにしております。\nご都合が悪くなった場合は、お手数ですがお電話（${tel}）までご連絡ください。\n\n整えサロン`;
+  return `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(b.email)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+function reminderHtml(b) {
+  if (!b.email) return `<p class="muted" style="font-size:var(--fs-xs);margin-top:10px;">メール未登録のため、前日にお電話でご連絡ください。</p>`;
+  return `<div class="admin-actions" style="margin-top:10px;"><a class="admin-btn admin-btn-approve" style="text-decoration:none;text-align:center;" href="${esc(reminderGmailHref(b))}" target="_blank" rel="noopener noreferrer">前日リマインドをGmailで作成</a></div>`;
+}
+
 function adminRowHtml(b, actionsHtml) {
   let h = `<div class="admin-row${b.status === "pending" ? " pending" : ""}">`;
   h += `<p class="when">${b.dateKey.replace(/-/g, "/")}（${dowJP(new Date(b.dateKey + "T00:00:00"))}） ${b.start}〜${b.end}</p>`;
@@ -1105,7 +1119,7 @@ function adminShellHtml() {
   h += '<div class="admin-section-title">確定済みの予約（今後）</div>';
   h += upcoming.length ? upcoming.map((b) => adminRowHtml(b, S.adminConfirmCancelId === b.id
     ? `<div class="admin-actions"><button class="admin-btn admin-btn-reject" onclick="adminCancelConfirmed('${b.id}')">取り消す</button><button class="admin-btn admin-btn-cancel" onclick="cancelAdminCancel()">やめる</button></div>`
-    : `<div class="admin-actions"><button class="admin-btn admin-btn-cancel" onclick="askAdminCancel('${b.id}')">この予約を取り消す</button></div>`)).join("") : '<p class="admin-empty">今後の確定予約はありません。</p>';
+    : reminderHtml(b) + `<div class="admin-actions"><button class="admin-btn admin-btn-cancel" onclick="askAdminCancel('${b.id}')">この予約を取り消す</button></div>`)).join("") : '<p class="admin-empty">今後の確定予約はありません。</p>';
 
   h += '<div class="admin-section-title">過去・キャンセル済み</div>';
   h += past.length ? past.map((b) => adminRowHtml(b, `<div style="margin-top:10px;"><span class="pill ${statusPillClass(b.status, b.dateKey)}">${statusLabel(b.status)}</span></div>`)).join("") : '<p class="admin-empty">履歴はまだありません。</p>';
