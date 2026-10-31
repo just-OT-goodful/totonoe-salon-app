@@ -65,7 +65,7 @@
 要件書7章：Vercel（ホスティング）+ Supabase（DB、連携済み）+ Resend（通知メール／前日リマインド）+ GitHub。
 
 - [x] データベース連携（Supabase） — 完了
-- [x] 通知メール送信（Resend） — リクエスト受信・承認・却下の通知を実装済み（Supabase Edge Function `send-booking-email`、APIキーはFunction Secretのみ）。独自ドメイン未認証のため、現状の宛先はオーナー自身のメールアドレスのみ
+- [x] 予約リクエスト受信時のオーナー宛メール通知（Resend） — 実装済み（Supabase Edge Function `send-booking-email`、APIキーはFunction Secretのみ）。承認・却下の連絡は管理画面の「メールアプリで開く」ボタンから手動送信（独自ドメイン未取得のため）
 - [ ] 独自ドメインのResend認証（お客様本人宛に送るために必要）
 - [ ] 前日リマインドメール
 - [ ] 独自ドメインでの公開

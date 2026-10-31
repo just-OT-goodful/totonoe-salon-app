@@ -599,7 +599,6 @@ async function adminApprove(id) {
   render();
   try {
     await rpc("admin_set_booking_status", { p_pin: S.adminPin, p_id: id, p_status: "confirmed" });
-    notifyEmail("approved", id);
     await Promise.all([refreshAdminBookings(), refreshPublicBookings()]);
   } catch (e) { handleAdminError(e); }
   render();
@@ -609,7 +608,6 @@ async function adminReject(id) {
   render();
   try {
     await rpc("admin_set_booking_status", { p_pin: S.adminPin, p_id: id, p_status: "cancelled" });
-    notifyEmail("rejected", id);
     await Promise.all([refreshAdminBookings(), refreshPublicBookings()]);
   } catch (e) { handleAdminError(e); }
   render();
@@ -962,14 +960,21 @@ function notificationPreviewHtml(notice) {
   const b = notice.booking;
   const approved = notice.type === "approved";
   if (b.email) {
-    let h = `<div class="mailcard"><div class="mailcard-head"><span>通知メール（本番で自動送信される内容）</span><span>宛先: ${esc(b.name || "お客様")} 様</span></div><div class="mailcard-body">`;
+    let h = `<div class="mailcard"><div class="mailcard-head"><span>お客様へ送る連絡メールの文面</span><span>宛先: ${esc(b.name || "お客様")} 様</span></div><div class="mailcard-body">`;
     if (approved) {
       h += `<p class="mailcard-subject">【整えサロン】ご予約が確定しました</p><p class="mailcard-line">${esc(b.name)} 様</p><p class="mailcard-line">以下の内容でご予約が確定しましたのでご連絡いたします。</p><p class="mailcard-line">日時：${b.dateKey.replace(/-/g, "/")} ${b.start}〜${b.end}</p><p class="mailcard-line">メニュー：${esc(b.menuName)}（¥${b.price.toLocaleString()}）</p><p class="pill pill-confirmed" style="margin-top:10px;">確定</p>`;
     } else {
       h += `<p class="mailcard-subject">【整えサロン】ご予約についてのご連絡</p><p class="mailcard-line">${esc(b.name)} 様</p><p class="mailcard-line">大変申し訳ございませんが、下記のご希望日時でのご予約をお受けすることができませんでした。</p><p class="mailcard-line">日時：${b.dateKey.replace(/-/g, "/")} ${b.start}〜${b.end}</p><p class="mailcard-line">メニュー：${esc(b.menuName)}</p><p class="mailcard-line">お手数ですが、別の日時にて再度ご予約をお願いいたします。</p><p class="pill pill-cancelled" style="margin-top:10px;">お受けできませんでした</p>`;
     }
     h += "</div></div>";
-    h += `<p class="mailcard-hint">${approved ? "承認と同時に、お客様へ確定のご連絡メールが自動送信される想定です（本番の Resend で実装）。" : "却下と同時に、お客様へその旨をお伝えするメールが自動送信される想定です（「却下」の語は文面では使いません）。"}</p>`;
+    const subject = approved ? "【整えサロン】ご予約が確定しました" : "【整えサロン】ご予約についてのご連絡";
+    const when = `${b.dateKey.replace(/-/g, "/")} ${b.start}〜${b.end}`;
+    const body = approved
+      ? `${b.name} 様\n\n以下の内容でご予約が確定しましたのでご連絡いたします。\n\n日時：${when}\nメニュー：${b.menuName}（¥${b.price.toLocaleString()}）\n\n当日お待ちしております。\n整えサロン`
+      : `${b.name} 様\n\n大変申し訳ございませんが、下記のご希望日時でのご予約をお受けすることができませんでした。\n\n日時：${when}\nメニュー：${b.menuName}\n\nお手数ですが、別の日時にて再度ご予約をお願いいたします。\n整えサロン`;
+    const href = `mailto:${encodeURIComponent(b.email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    h += `<a href="${esc(href)}" class="btn btn-primary" style="text-decoration:none;margin-top:12px;">メールアプリで開く</a>`;
+    h += `<p class="mailcard-hint">上の文面で、お客様宛のメールを作成します（内容を確認して、ご自身で送信してください）。</p>`;
     return h;
   }
   return `<div class="mailcard"><div class="mailcard-head"><span>ご連絡方法</span><span>${esc(b.name || "お客様")} 様</span></div><div class="mailcard-body"><p class="mailcard-line">メールアドレスのご登録がないため、メールでの自動通知はできません。</p><p class="mailcard-line">電話（${esc(b.phone || "未登録")}）にて、${approved ? "確定" : "お受けできない旨"}をご連絡ください。</p></div></div><p class="mailcard-hint">メールアドレス未登録のお客様への通知手段は、要件書8章のとおりまだ確定していません。</p>`;
