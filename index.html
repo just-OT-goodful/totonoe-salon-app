@@ -354,6 +354,22 @@ const MENU_ITEMS = [
 // 管理者が編集済みならその内容を、未編集なら初期値（MENU_ITEMS）を使う。
 function currentMenuItems() { return (S.settings.menuItems && S.settings.menuItems.length) ? S.settings.menuItems : MENU_ITEMS; }
 
+// 2回目の案内：初回限定メニューのお客様に、次のおすすめメニューを案内する。
+// 設定は app_settings.contact_info の nextVisit に保存する（DBの列を増やさずに済むため）。
+const NEXT_VISIT_DEFAULT = {
+  enabled: true,
+  menuId: "m1",
+  message: "初回でお伺いしたお悩みに合わせて、続けて整えていきましょう。2回目は、こちらのコースがおすすめです。",
+  perk: "",
+};
+function isFirstMenu(m) { return !!m && m.cat === "first"; }
+function nextVisitGuide() {
+  const g = { ...NEXT_VISIT_DEFAULT, ...((S.settings.contactInfo && S.settings.contactInfo.nextVisit) || {}) };
+  const items = currentMenuItems();
+  const mn = items.find((m) => m.id === g.menuId && !isFirstMenu(m)) || items.find((m) => !isFirstMenu(m));
+  return g.enabled && mn ? { ...g, menu: mn } : null;
+}
+
 function pad(n) { return String(n).padStart(2, "0"); }
 function toDateKey(d) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; }
 function toMinutes(hhmm) { const [h, m] = hhmm.split(":").map(Number); return h * 60 + m; }
@@ -782,6 +798,20 @@ async function adminSaveContact() {
   catch (e) { handleAdminError(e); render(); }
 }
 
+// ---- 2回目の案内 ----
+async function adminSaveNextVisit() {
+  const val = (id) => { const el = document.getElementById(id); return el ? el.value.trim() : ""; };
+  const enabledEl = document.getElementById("nv-enabled");
+  const nextVisit = {
+    enabled: enabledEl ? enabledEl.checked : true,
+    menuId: val("nv-menu"),
+    message: val("nv-message") || NEXT_VISIT_DEFAULT.message,
+    perk: val("nv-perk"),
+  };
+  try { await saveSettingsRemote({ contactInfo: { ...S.settings.contactInfo, nextVisit } }); flash("2回目の案内を更新しました"); }
+  catch (e) { handleAdminError(e); render(); }
+}
+
 // ---- メニュー編集 ----
 async function adminSaveMenuItems() {
   const updated = currentMenuItems().map((m) => {
@@ -879,7 +909,14 @@ function screenHome() {
   }
   h += `<button class="card" style="width:100%;text-align:left;display:flex;justify-content:space-between;align-items:center;cursor:pointer;font-family:inherit;min-height:var(--tap);" onclick="changeTab('mypage')"><span style="font-size:var(--fs-base);font-weight:500;">ご来店履歴を見る</span><span class="muted" style="font-size:20px;">›</span></button>`;
   h += `<div class="banner" style="grid-column:1 / -1;">${LeafDeco}`;
-  if (lastMenu) {
+  const guide = nextVisitGuide();
+  if (isFirstMenu(lastMenu) && guide) {
+    h += `<p class="eyebrow" style="color:#fff;opacity:0.8;">2回目のご案内</p><p style="font-size:var(--fs-sm);line-height:1.7;opacity:0.95;margin-bottom:10px;">${esc(guide.message)}</p>`;
+    h += `<p class="serif" style="font-size:var(--fs-lg);line-height:1.4;color:#fff;">${esc(guide.menu.name)}</p><p style="font-size:var(--fs-sm);opacity:0.9;margin-top:8px;">${guide.menu.duration}分 ／ ¥${guide.menu.price.toLocaleString()}</p>`;
+    if (guide.perk) h += `<p style="display:inline-block;margin-top:10px;padding:6px 14px;border-radius:999px;background:rgba(255,255,255,0.18);font-size:var(--fs-sm);font-weight:600;">${esc(guide.perk)}</p>`;
+    h += `<button class="btn" style="margin-top:16px;background:#fff;color:var(--moss-deep);" onclick="startFlow('${guide.menu.id}')">このメニューで予約する</button>`;
+    h += `<button class="btn-text" style="display:block;margin-top:8px;color:#fff;" onclick="startFlow()">ほかのメニューから選ぶ</button>`;
+  } else if (lastMenu) {
     h += `<p class="eyebrow" style="color:#fff;opacity:0.8;">前回のご利用メニュー</p><p class="serif" style="font-size:var(--fs-lg);line-height:1.4;color:#fff;">${esc(lastMenu.name)}</p><p style="font-size:var(--fs-sm);opacity:0.9;margin-top:8px;">${lastMenu.duration}分 ／ ¥${lastMenu.price.toLocaleString()}</p><button class="btn" style="margin-top:16px;background:#fff;color:var(--moss-deep);" onclick="startFlow('${lastMenu.id}')">同じメニューでもう一度予約</button>`;
   } else {
     h += `<p class="eyebrow" style="color:#fff;opacity:0.8;">はじめての方に</p><p class="serif" style="font-size:var(--fs-xl);line-height:1.4;color:#fff;">おためし相談<br>コース</p><p style="font-size:var(--fs-sm);opacity:0.9;margin-top:8px;">60分 ／ ¥2,000</p><button class="btn" style="margin-top:16px;background:#fff;color:var(--moss-deep);" onclick="startFlow('f1')">ご予約はこちら</button>`;
@@ -925,6 +962,14 @@ function screenBook() {
     h += `<div class="row"><span class="k">料金</span><span class="v">¥${mn ? mn.price.toLocaleString() : ""}</span></div></div>`;
     if (S.form.email) h += '<p class="note note-moss" style="margin-top:14px;text-align:left;">サロンの確認後、確定のご連絡をメールでお送りします。</p>';
     else h += '<p class="note note-warn" style="margin-top:14px;text-align:left;">メールアドレスのご登録がないため、確定のご連絡はお電話にて行います。</p>';
+    const guide = nextVisitGuide();
+    if (isFirstMenu(mn) && guide) {
+      h += '<div class="card" style="text-align:left;margin-top:14px;"><p class="eyebrow">2回目のご案内</p>';
+      h += `<p style="font-size:var(--fs-sm);line-height:1.7;">${esc(guide.message)}</p>`;
+      h += `<p style="font-size:var(--fs-base);font-weight:600;margin-top:10px;">${esc(guide.menu.name)}</p><p class="muted" style="font-size:var(--fs-sm);">${guide.menu.duration}分 ／ ¥${guide.menu.price.toLocaleString()}</p>`;
+      if (guide.perk) h += `<p class="pill pill-confirmed" style="margin-top:10px;">${esc(guide.perk)}</p>`;
+      h += '<p class="muted" style="font-size:var(--fs-xs);margin-top:10px;line-height:1.6;">ご来店のあとは、ホーム画面からかんたんにご予約いただけます。</p></div>';
+    }
     h += '<button class="btn btn-primary" style="margin-top:16px;" onclick="resetFlow()">ホームに戻る</button></div></div>';
     return h;
   }
@@ -1216,6 +1261,17 @@ function adminShellHtml() {
 
   h += '<div class="admin-section-title">過去・キャンセル済み</div>';
   h += past.length ? past.map((b) => adminRowHtml(b, `<div style="margin-top:10px;"><span class="pill ${statusPillClass(b.status, b.dateKey)}">${statusLabel(b.status)}</span></div>`)).join("") : '<p class="admin-empty">履歴はまだありません。</p>';
+
+  const nv = { ...NEXT_VISIT_DEFAULT, ...(S.settings.contactInfo.nextVisit || {}) };
+  h += '<div class="admin-section-title">2回目の案内</div><p class="muted" style="font-size:var(--fs-xs);margin:-4px 0 10px;line-height:1.7;">初回限定メニューのお客様に、予約を送った直後の画面と、ご来店後のホーム画面で、次のおすすめメニューを案内します。</p>';
+  h += '<div class="admin-row">';
+  h += `<label class="dchip" style="margin-bottom:12px;"><input type="checkbox" id="nv-enabled" ${nv.enabled ? "checked" : ""}>案内を表示する</label>`;
+  h += '<label style="display:block;margin-bottom:10px;"><span class="admin-fieldlabel">おすすめするメニュー</span><select id="nv-menu" class="admin-input">';
+  currentMenuItems().filter((m) => !isFirstMenu(m)).forEach((m) => { h += `<option value="${m.id}" ${m.id === nv.menuId ? "selected" : ""}>${esc(m.name)}（${m.duration}分 ¥${m.price.toLocaleString()}）</option>`; });
+  h += '</select></label>';
+  h += `<label style="display:block;margin-bottom:10px;"><span class="admin-fieldlabel">案内文</span><textarea id="nv-message" class="admin-textarea" maxlength="200">${esc(nv.message)}</textarea></label>`;
+  h += `<label style="display:block;margin-bottom:12px;"><span class="admin-fieldlabel">2回目の特典（任意・空欄なら表示しません）</span><input id="nv-perk" class="admin-input" maxlength="40" placeholder="例：2回目のご予約は500円引き" value="${esc(nv.perk)}"></label>`;
+  h += '<div class="admin-actions"><button class="admin-btn admin-btn-approve" onclick="adminSaveNextVisit()">2回目の案内を保存する</button></div></div>';
 
   h += '<div class="admin-section-title">メニュー編集</div><p class="muted" style="font-size:var(--fs-xs);margin:-4px 0 10px;">名称・説明・時間・料金を変更できます。変更後は下部の「メニューを保存する」を押してください。</p>';
   currentMenuItems().forEach((m) => {
